@@ -97,3 +97,12 @@ def decorate_search(field):
     from .icons import outline_icon
     field.addAction(outline_icon("search"), QLineEdit.LeadingPosition)
     field.setProperty("toolbarStretch", True)
+
+
+def library_header(eyebrow,title,subtitle,path=None):
+    from .hub_ui import ArtworkHero
+    hero=ArtworkHero(path);hero.library_overview=True;hero.setFixedHeight(150)
+    layout=QVBoxLayout(hero);layout.setContentsMargins(18,10,18,12);layout.addStretch()
+    for text,object_name in ((eyebrow,'eyebrow'),(title,'title'),(subtitle,'muted')):
+        label=QLabel(text);label.setObjectName(object_name);layout.addWidget(label)
+    return hero

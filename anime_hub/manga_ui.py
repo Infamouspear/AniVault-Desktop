@@ -112,16 +112,23 @@ class MangaLibraryMixin:
         started=time.perf_counter();self.manga_context={'scope':scope,'search':search,'filter':filter,'sort':sort};self.current_view='restricted_manga_library' if scope=='restricted' else 'manga_library';self._set_active_nav('restricted' if scope=='restricted' else 'manga')
         page=QWidget();page.setProperty('mangaPage',True);outer=QVBoxLayout(page);outer.setContentsMargins(22,18,22,18)
         if scope=='restricted':self._restricted_nav(outer)
-        header=QHBoxLayout();title=QLabel('Restricted Local Manga' if scope=='restricted' else 'Manga');title.setObjectName('title');header.addWidget(title);header.addStretch()
+        rows=self.manga_store.series_list(scope)
+        from .desktop_ui import library_header,decorate_search
+        from .polish_ui import CompactFilterLayout
+        if scope=='normal':
+            artwork=next((path for row in rows for path in (row.get('manual_cover_path'),row.get('cover_path')) if path and Path(path).is_file()),None)
+            outer.addWidget(library_header('YOUR LIBRARY','Manga','Browse and manage your manga collection',artwork))
+        else:
+            title=QLabel('Restricted Local Manga');title.setObjectName('title');outer.addWidget(title)
+        header=CompactFilterLayout(38)
         for label,action in [('Roots…',lambda:self.manage_manga_roots(scope)),('Rescan Manga',self.scan_manga_library),('Open Manga / Comic…',self.choose_local_manga)]:
             button=QPushButton(label);button.clicked.connect(action);header.addWidget(button)
-        outer.addLayout(header)
-        controls=QHBoxLayout();text=QLineEdit(search);text.setPlaceholderText('Search local manga…');controls.addWidget(text,1)
+        controls=header;text=QLineEdit(search);text.setPlaceholderText('Search local manga…');decorate_search(text);text.setMinimumWidth(170);controls.addWidget(text)
         filters=QComboBox();filters.addItems(['All','Continue Reading','Recently Read','In Progress','No Status','Reading','Planning','Completed','Paused','Dropped','Unread / Not Started','Progress Complete','Favorites','Recently Added']);filters.setCurrentText(filter);controls.addWidget(filters)
         sorts=QComboBox();sorts.addItems(['Title','Recently Added','Recently Read','Progress']);sorts.setCurrentText(sort);controls.addWidget(sorts);outer.addLayout(controls)
         status=QLabel();status.setObjectName('muted');outer.addWidget(status)
         scroll=QScrollArea();scroll.setWidgetResizable(True);grid=ui().ResponsiveLibraryGrid(card_width=POSTER_CARD_WIDTH);scroll.setWidget(grid);outer.addWidget(scroll)
-        rows=self.manga_store.series_list(scope);generation={'value':0}
+        generation={'value':0}
         def render(*args):
             rows=self.manga_store.series_list(scope)
             generation['value']+=1;token=generation['value'];grid.clear_cards()

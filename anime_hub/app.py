@@ -363,7 +363,7 @@ class MultiSelectPicker(QPushButton):
 class ViewAllCard(QFrame):
     clicked=Signal()
     def __init__(self,heading):
-        super().__init__(); self.setObjectName("card"); self.setFixedSize(CARD_WIDTH,CARD_HEIGHT); layout=QVBoxLayout(self); layout.addStretch(); icon=QLabel("→"); icon.setAlignment(Qt.AlignCenter); icon.setStyleSheet("font-size:42px;color:#ff5a8b"); layout.addWidget(icon); title=QLabel(f"View All {heading}"); title.setObjectName("section"); title.setAlignment(Qt.AlignCenter); title.setWordWrap(True); layout.addWidget(title); hint=QLabel("Keep browsing"); hint.setObjectName("muted"); hint.setAlignment(Qt.AlignCenter); layout.addWidget(hint); layout.addStretch()
+        super().__init__(); self.setObjectName("card"); self.setFixedSize(CARD_WIDTH,374); layout=QVBoxLayout(self); layout.addStretch(); icon=QLabel("→"); icon.setAlignment(Qt.AlignCenter); icon.setStyleSheet("font-size:42px;color:#ff5a8b"); layout.addWidget(icon); title=QLabel(f"View All {heading}"); title.setObjectName("section"); title.setAlignment(Qt.AlignCenter); title.setWordWrap(True); layout.addWidget(title); hint=QLabel("Keep browsing"); hint.setObjectName("muted"); hint.setAlignment(Qt.AlignCenter); layout.addWidget(hint); layout.addStretch()
     def mousePressEvent(self,event):
         if event.button()==Qt.LeftButton:self.clicked.emit()
 
@@ -409,9 +409,11 @@ class Card(QFrame):
 class SeasonCard(QFrame):
     clicked=Signal(int)
     save_toggled=Signal(int,bool)
-    def __init__(self,item,in_library=False,artwork_loader=None,show_save=False,saved=False,manual_status=None):
+    def __init__(self,item,in_library=False,artwork_loader=None,show_save=False,saved=False,manual_status=None,compact=False):
         show_save=False # AniList later intent belongs to Planning, never Saved.
-        super().__init__();self.item=item;self.saved_scope="normal";self.setObjectName("card");layout=media_layout(self);card_input(self,lambda:self.clicked.emit(int(self.item["id"])))
+        super().__init__();self.item=item;self.saved_scope="normal";self.setObjectName("card");layout=media_layout(self);
+        if compact:self.setProperty("posterCard",True);self.setFixedHeight(374)
+        card_input(self,lambda:self.clicked.emit(int(self.item["id"])))
         art=QLabel("LOADING ARTWORK");art.setAlignment(Qt.AlignCenter);art.setFixedSize(COVER_WIDTH,COVER_HEIGHT);art.setStyleSheet("background:#171f2b;border-radius:8px;color:#707d8c");layout.addWidget(art)
         cover=(item.get('coverImage') or {}).get('extraLarge') or (item.get('coverImage') or {}).get('large')
         if cover and artwork_loader:artwork_loader(cover,art,COVER_WIDTH,COVER_HEIGHT)
@@ -423,11 +425,15 @@ class SeasonCard(QFrame):
         if not is_manga and airing.get('episode') and item.get('status')!='FINISHED':state=f"Next: Episode {airing['episode']}"
         value=('18+ · ' if item.get('isAdult') else '')+('◈ In Vault' if in_library else 'AniList')+' · '+state
         self.secondary=text_slot(layout,'seasonLocalMetadata' if in_library else 'seasonRemoteMetadata',30);self.secondary.setAlignment(Qt.AlignCenter);self.secondary.setStyleSheet('color:#ff6a96' if in_library else 'color:#a89ab8');self.secondary.setToolTip(value);self.secondary.setWordWrap(True);self.secondary.setFixedHeight(36);self.secondary.setText('\n'.join(value.rsplit(' · ',1)))
+        if compact:
+            self.secondary.setFixedHeight(20);self.secondary.setAlignment(Qt.AlignLeft)
+            self.secondary.setText(('In Vault · ' if in_library else '')+state)
         reason=item.get('_recommendation_reason') or '';self.note=TwoLineLabel(reason);self.note.setObjectName('recommendationReason' if reason else 'mediaNote');self.note.setFixedHeight(26);self.note.setToolTip(reason);self.note.setStyleSheet('color:#c7becd;font-size:11px');layout.addWidget(self.note)
+        if compact and not reason:self.note.hide()
         if show_save:
             footer=footer_slot(layout)
             box=QHBoxLayout(footer);box.setContentsMargins(0,0,0,0);self.save_button=QPushButton('Saved' if saved else 'Save');self.save_button.setFixedHeight(28);self.save_button.setStyleSheet('padding:3px 7px');self.save_button.setProperty('saved',saved);self.save_button.clicked.connect(self._toggle_saved);box.addWidget(self.save_button)
-        else:layout.addSpacing(28)
+        elif not compact:layout.addSpacing(28)
         layout.addSpacing(6);card_input(self)
     def _toggle_saved(self):
         value=not bool(self.save_button.property('saved'));self.save_button.setProperty('saved',value);self.save_button.setText('Saved' if value else 'Save');self.save_toggled.emit(int(self.item['id']),value)
@@ -900,10 +906,10 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
             if layout.count():layout.addSpacing(7)
             label=QLabel(text); label.setObjectName("eyebrow"); layout.addWidget(label);labels.append(label)
         section("PRIMARY"); nav("home","⌂   Home",self.show_home)
-        nav("all","▦   Anime",self.show_library);nav("manga","▤   Manga",lambda:self.show_manga_library());nav("watching","▶   Continue Watching",lambda:self.show_library(state_filter="In Progress"));nav("recent","＋   Recently Added",lambda:self.show_library(sort_mode="Recently Added"));nav("favorites","♡   Favorites",self.show_favorites)
+        nav("all","▦   Anime",self.show_library);nav("manga","▤   Manga",lambda:self.show_manga_library());nav("favorites","♡   Favorites",self.show_favorites)
         nav("statistics","Statistics",self.show_statistics)
         section("DISCOVER");nav("discover","✦   Discover",self.show_discover);nav("airing","◫   Airing / Upcoming",self.show_airing)
-        section("ORGANIZE");nav("planning","◇   Planning",lambda:self.show_status_list("Planning","normal"));nav("collections","▤   Collections",lambda:self.show_collections("normal"));nav("status_hub","◉   Status Hub",self.show_status_hub)
+        section("ORGANIZE");nav("planning","◇   Planning",lambda:self.show_status_list("Planning","normal"));nav("collections","▤   Collections",lambda:self.show_collections("normal"))
         section("SYSTEM");nav("requests","Requests && Feedback",self.show_requests);nav("downloads","↓   Downloads",self.show_downloads);nav("settings","⚙   Settings",self.show_settings)
         layout.addSpacing(7); self.restricted_label=QLabel("RESTRICTED"); self.restricted_label.setObjectName("eyebrow"); layout.addWidget(self.restricted_label); self.restricted_button=nav("restricted","◆   Restricted Archive",self.show_restricted_home)
         unlocked=self.db.setting("restricted_unlocked","0")=="1";self.restricted_label.setVisible(unlocked);self.restricted_button.setVisible(unlocked)
@@ -944,8 +950,9 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         key=("planning" if self.current_status_name=="Planning" else "status_hub") if key=="collections" and self.current_view=="status_list" else "status_hub" if key in {"unwatched","completed"} else key
         key={"saved":"discover","franchises":"collections"}.get(key,key)
         self.active_nav_key=key
+        highlight={"watching":"home","recent":"home","status_hub":"collections"}.get(key,key)
         for name,button in self.nav_buttons.items():
-            button.setProperty("active",name==key); button.setIcon(outline_icon(NAV_ICONS.get(name,"bookmark"),name==key,self.devicePixelRatioF())); button.style().unpolish(button); button.style().polish(button); button.update()
+            button.setProperty("active",name==highlight); button.setIcon(outline_icon(NAV_ICONS.get(name,"bookmark"),name==highlight,self.devicePixelRatioF())); button.style().unpolish(button); button.style().polish(button); button.update()
 
     def replace(self, widget):
         if self.manga_reader_page is not None and widget is not self.manga_reader_page:
@@ -1568,7 +1575,7 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         if local_row and not is_manga:
             if self.db.anime_scope(local_row)!=scope:local_row=None
         manual=(local_row["manual_status"] or self.db.manual_status(scope,anilist_id=item["id"])) if is_manga and local_row else self.db.manual_status(scope,anime_id=local_row["id"]) if local_row else self.db.manual_status(scope,anilist_id=item["id"])
-        card=SeasonCard(item,bool(local_row),self._load_remote_artwork,False,False,manual);card.saved_scope=scope
+        card=SeasonCard(item,bool(local_row),self._load_remote_artwork,False,False,manual,compact=scope=="normal");card.saved_scope=scope
         key=f"manga:{local_row['id']}" if is_manga and local_row else self.db.entity_key_for_anime(local_row["id"]) if local_row else f"anilist:{int(item['id'])}"
         self._register_status_card(card,scope,key);self._register_status_card(card,scope,f"anilist:{int(item['id'])}")
         card.clicked.connect(lambda _:self.show_manga_detail(local_row["id"]) if is_manga and local_row else self.show_detail(local_row["id"]) if local_row else self.show_remote_anilist(item,source))
@@ -1804,7 +1811,7 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         refresh=QPushButton("↻ Refresh");refresh.setToolTip("Refresh Recommendations");refresh.clicked.connect(lambda:self._refresh_recommendations(restricted,media_type));media_switch.addStretch();media_switch.addWidget(refresh);outer.addLayout(media_switch)
         media_label="Manga" if media_type=="MANGA" else "Anime";title=QLabel(("Restricted " if restricted else "")+"Discover "+media_label); title.setObjectName("title"); title.hide()
         intro=QLabel(f"Adult-only AniList {media_label.lower()} discovery. Every result is explicitly marked adult by AniList." if restricted else "Browse AniList beyond your local vault. Remote titles remain informational until you add your own media."); intro.setObjectName("muted");compact_title.setToolTip(intro.text());intro.hide()
-        search_row=QHBoxLayout(); search=QLineEdit(); search.setPlaceholderText(f"Search all {media_label.lower()} on AniList…"); search_row.addWidget(search,2); genre_picker=MultiSelectPicker("Genres"); tag_picker=MultiSelectPicker("Tags");  search_button=QPushButton("Search"); search_button.setObjectName("primary"); search_row.addWidget(search_button); outer.addLayout(search_row)
+        search_row=QHBoxLayout(); search=QLineEdit(); search.setPlaceholderText(f"Search all {media_label.lower()} on AniList…"); decorate_search(search); search_row.addWidget(search,2); genre_picker=MultiSelectPicker("Genres"); tag_picker=MultiSelectPicker("Tags");  search_button=QPushButton("Search"); search_button.setObjectName("primary"); search_row.addWidget(search_button); outer.addLayout(search_row)
         browse_row=CompactFilterLayout(); year_from=QLineEdit(); year_from.setPlaceholderText("Year from"); year_from.setMaximumWidth(95); browse_row.addWidget(year_from); year_to=QLineEdit(); year_to.setPlaceholderText("Year to"); year_to.setMaximumWidth(95); browse_row.addWidget(year_to)
         season_filter=QComboBox(); season_filter.addItems(["Any season","WINTER","SPRING","SUMMER","FALL"]);season_filter.setVisible(media_type=="ANIME"); browse_row.addWidget(season_filter); format_filter=QComboBox(); format_filter.addItems((["Any format","MANGA","ONE_SHOT","NOVEL"] if media_type=="MANGA" else ["Any format","TV","TV_SHORT","MOVIE","SPECIAL","OVA","ONA","MUSIC"])); browse_row.addWidget(format_filter); status_filter=QComboBox(); status_filter.addItems(["Any status","RELEASING","FINISHED","NOT_YET_RELEASED","CANCELLED","HIATUS"]); browse_row.addWidget(status_filter);country_filter=QComboBox();country_filter.addItems(MANGA_COUNTRIES);country_filter.setVisible(media_type=="MANGA");browse_row.addWidget(country_filter);source_filter=QComboBox();source_filter.addItems(MANGA_SOURCES);source_filter.setVisible(media_type=="MANGA");browse_row.addWidget(source_filter); sort_filter=QComboBox(); sort_filter.addItems(["Popularity","Score","Trending","Newest","Oldest","Title"]); browse_row.addWidget(sort_filter); library_filter=QComboBox(); library_filter.addItems(["All","In Library","Not In Library"]);library_filter.setVisible(media_type=="ANIME"); browse_row.addWidget(library_filter); browse_row.addWidget(genre_picker);browse_row.addWidget(tag_picker);clear_filters=QPushButton("Clear");clear_filters.setToolTip("Clear All"); browse_row.addWidget(clear_filters); outer.addLayout(browse_row)
         for control in (search,search_button,genre_picker,tag_picker,year_from,year_to,season_filter,format_filter,status_filter,country_filter,source_filter,sort_filter,library_filter,clear_filters,refresh):control.setFixedHeight(32);control.setStyleSheet("padding:4px 7px")
@@ -2130,8 +2137,8 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         _append_playback_log(f"Navigation requested: Airing — {label}")
         self.current_view="airing"; self.current_anime_id=None; self._set_active_nav("airing")
         page=QWidget(); page_outer=QVBoxLayout(page); page_outer.setContentsMargins(22,18,22,18); self._top_header(page_outer)
-        title=QLabel(f"AIRING — {label}"); title.setObjectName("title"); page_outer.addWidget(title)
-        note=QLabel("Current-season anime from AniList. Titles in your local vault are linked automatically."); note.setObjectName("muted"); page_outer.addWidget(note)
+        from .desktop_ui import library_header
+        page_outer.addWidget(library_header("THIS SEASON",f"Airing · {label}","Current and upcoming anime from AniList"))
         scroll=AiringScrollArea("Airing")
         body=QWidget(); body.setSizePolicy(QSizePolicy.Expanding,QSizePolicy.Preferred); outer=QVBoxLayout(body); outer.setAlignment(Qt.AlignTop); scroll.setWidget(body); page_outer.addWidget(scroll); self.replace(page)
         scroll.viewport_resized.connect(lambda width,reason,p=page,s=scroll:self._apply_airing_viewport(p,s,width,reason))
@@ -2183,7 +2190,7 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
                 cards=[]
                 for item in (section_items if not view_all else section_items[:preview_count]):
                     anilist_id=int(item["id"]); row=by_anilist.get(anilist_id)
-                    card=SeasonCard(item,row is not None,self._load_remote_artwork);self._register_status_card(card,'normal',self.db.entity_key_for_anime(row['id']) if row else 'anilist:'+str(item['id']))
+                    card=SeasonCard(item,row is not None,self._load_remote_artwork,compact=True);self._register_status_card(card,'normal',self.db.entity_key_for_anime(row['id']) if row else 'anilist:'+str(item['id']))
                     card.clicked.connect(lambda value,local_rows=by_anilist,items=item_map:self.show_detail(local_rows[value]["id"]) if value in local_rows else self.show_remote_anilist(items[value]))
                     cards.append(card)
                 section_layout.addWidget(ResponsiveSeasonGrid(cards,context=heading)); outer.addWidget(section_widget); self._schedule_airing_reflow()
@@ -2266,7 +2273,7 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
                 f"adult removed={initial_counts['explicit_adult']} count after adult filtering={initial_counts['adult']} count after format filtering={initial_counts['format']} "
                 f"count after status filtering={initial_counts['status']} count after dedupe={initial_counts['dedupe']} visible cards produced={len(items)}")
         def make_card(item):
-            value=int(item["id"]); card=SeasonCard(item,value in by_anilist,self._load_remote_artwork);self._register_status_card(card,"normal",self.db.entity_key_for_anime(by_anilist[value]["id"]) if value in by_anilist else "anilist:"+str(value))
+            value=int(item["id"]); card=SeasonCard(item,value in by_anilist,self._load_remote_artwork,compact=True);self._register_status_card(card,"normal",self.db.entity_key_for_anime(by_anilist[value]["id"]) if value in by_anilist else "anilist:"+str(value))
             card.clicked.connect(lambda anime_id,local=by_anilist,data=item_map:self.show_detail(local[anime_id]["id"]) if anime_id in local else self.show_remote_anilist(data[anime_id])); return card
         def render_batch():
             visible=current["visible"]; start=current["shown"]; end=min(start+batch_size,len(visible))

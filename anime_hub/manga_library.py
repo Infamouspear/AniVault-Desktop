@@ -128,9 +128,11 @@ def scan_manga(roots, cancelled=lambda:False):
                         v,_,_=parse_numbers(parent)
                         if v is not None:break
                 display=readable_label(path.name,v,c)
-                try:modified=path.stat().st_mtime
+                try:
+                    info=path.stat();modified=info.st_mtime
+                    size_bytes=sum((directory/name).stat().st_size for name in images) if kind=='folder' else info.st_size
                 except OSError as exc:errors.append(f'{type(exc).__name__}: {path}');continue
-                series['items'].append({'path':str(path.resolve()),'path_key':key,'source_type':kind,'volume':v,'chapter':c,'display_name':display,'modified':modified})
+                series['items'].append({'path':str(path.resolve()),'path_key':key,'source_type':kind,'volume':v,'chapter':c,'display_name':display,'modified':modified,'size_bytes':size_bytes})
         if not errors:result['roots_done'].append(root_id)
         result['errors'].extend(errors)
     return result
@@ -209,11 +211,11 @@ class MangaStore:
                         preferred=item_identity(item['path'],row['scope'])
                         alternate=normal_identity if row['scope']=='restricted' else private_identity
                         identity=preferred if preferred in reader_states else alternate if alternate in reader_states else preferred
-                    self.connection.execute('''INSERT INTO manga_items(series_id,path,path_key,source_type,volume,chapter,display_name,reader_identity,modified)
-                      VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(path_key) DO UPDATE SET present=1,
-                      series_id=excluded.series_id,path=excluded.path,modified=excluded.modified,source_type=excluded.source_type,
+                    self.connection.execute('''INSERT INTO manga_items(series_id,path,path_key,source_type,volume,chapter,display_name,reader_identity,modified,size_bytes)
+                      VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(path_key) DO UPDATE SET present=1,
+                      series_id=excluded.series_id,path=excluded.path,modified=excluded.modified,size_bytes=excluded.size_bytes,source_type=excluded.source_type,
                       volume=excluded.volume,chapter=excluded.chapter,display_name=excluded.display_name''',
-                      (sid,item['path'],item['path_key'],item['source_type'],item['volume'],item['chapter'],item['display_name'],identity,item['modified']))
+                      (sid,item['path'],item['path_key'],item['source_type'],item['volume'],item['chapter'],item['display_name'],identity,item['modified'],item.get('size_bytes')))
                     touched.add(item['path_key'])
                     self.connection.execute('UPDATE manga_reader_state SET scope=? WHERE identity=?',(row['scope'],identity))
                     if old is None:new+=1

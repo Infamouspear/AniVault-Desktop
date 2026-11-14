@@ -8,6 +8,18 @@ from .desktop_ui import overview_stats,stats_strip
 STATUSES = ("Watching","Completed","Planning","Paused","Dropped","Unassigned")
 
 
+def storage_text(rows):
+    total=sum(r[0] for r in rows)
+    known=sum(r[1] for r in rows)
+    if total and not known:return 'Rescan needed'
+    size=sum(r[2] for r in rows)
+    units=('B','KiB','MiB','GiB','TiB','PiB')
+    for unit in units:
+        if size<1024 or unit==units[-1]:break
+        size/=1024
+    return (f'{size:.1f} {unit}' if unit!='B' else f'{size} B') + (' (partial)' if known<total else '')
+
+
 def summarize(anime, manga, episodes):
     statuses=Counter({key:0 for key in STATUSES})
     genres=Counter()
@@ -63,6 +75,8 @@ def measures(data, compact=False):
                 bar=QProgressBar();bar.setTextVisible(False);bar.setRange(0,max(1,denominator));bar.setValue(value);row.addWidget(bar,1)
                 label=QLabel(f"{value} · {value/max(1,denominator):.0%}");label.setMinimumWidth(82);row.addWidget(label)
                 layout.addLayout(row)
-        notes=QLabel("Counts include local public library entries once each, without franchise totals. Completion uses assigned status. Episode counts include indexed, present episode files. Storage size is unavailable: the index does not record file sizes. Weekly and monthly activity require a local timestamped event history; current progress cannot reconstruct it.")
+        if data.get("storage_split"):
+            anime,manga=data["storage_split"];layout.addWidget(QLabel(f"Anime storage: {anime} · Manga storage: {manga}"))
+        notes=QLabel("Counts include local public library entries once each, without franchise totals. Completion uses assigned status. Episode counts include indexed, present episode files. Storage reflects present indexed files. Rescan Anime and Manga to fill missing sizes. Weekly and monthly activity require a local timestamped event history; current progress cannot reconstruct it.")
         notes.setWordWrap(True);notes.setObjectName("muted");layout.addWidget(notes)
     return outer

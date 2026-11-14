@@ -97,7 +97,7 @@ def test_manga_and_anime_reasons_are_visible_and_keep_metadata(window):
     ranked=w._rank_recommendations(w._recommendation_profile('normal','MANGA'),[item(103,'Drama','MANGA')])
     card=w._make_discover_card(ranked[0],{},'Discover');card.show();QTest.qWait(50)
     reason=card.findChild(QLabel,'recommendationReason');assert reason and reason.isVisible() and 'reading' in reason.text()
-    assert any('AniList' in label.text() for label in card.findChildren(QLabel))
+    assert 'AniList' in card.secondary.toolTip() and 'AniList' not in card.secondary.text()
     other=w._make_discover_card({**remote(104),'_recommendation_reason':'Similar to a title in Favorites'}, {},'Discover');assert other.findChild(QLabel,'recommendationReason')
     card.deleteLater();other.deleteLater()
 

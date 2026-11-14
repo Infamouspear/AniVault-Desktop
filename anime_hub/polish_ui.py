@@ -70,7 +70,7 @@ class CoverListCard(QFrame):
         painter.end(); art.setPixmap(pix); layout.addWidget(art)
         placeholder=QPixmap(art_width,art_height);placeholder.fill(QColor('#17202b'));painter=QPainter(placeholder);painter.setPen(QColor(color));font=painter.font();font.setPointSize(28);painter.setFont(font);painter.drawText(placeholder.rect(),Qt.AlignCenter,'+' if 'New Collection' in title else title[:1]);painter.end();self._mosaic_placeholder=placeholder
         from .app import TwoLineLabel
-        name=TwoLineLabel(title) if standard else QLabel(title);name.setObjectName('cardTitle');name.setStyleSheet('color:'+color);name.setWordWrap(True);name.setFixedHeight(42) if standard else name.setMaximumHeight(42)
+        name=TwoLineLabel(title) if standard or height>=350 else QLabel(title);name.setObjectName('cardTitle');name.setStyleSheet('color:'+color);name.setWordWrap(True);name.setToolTip(title);name.setFixedHeight(42) if standard or height>=350 else name.setMaximumHeight(42)
         layout.addWidget(name); self.count_label=QLabel(subtitle);self.count_label.setObjectName('muted');self.count_label.setWordWrap(True);self.count_label.setFixedHeight(20) if standard else self.count_label.setMaximumHeight(38);layout.addWidget(self.count_label)
         if standard:
             from .media_cards import text_slot,footer_slot

@@ -122,9 +122,12 @@ class Database:
         media_columns = {row[1] for row in self.connection.execute("PRAGMA table_info(media)")}
         for name, declaration in (("watched", "INTEGER NOT NULL DEFAULT 0"),
                                   ("watched_at", "TEXT"),
+                                  ("size_bytes", "INTEGER"),
                                   ("resume_position_ms", "INTEGER NOT NULL DEFAULT 0")):
             if name not in media_columns:
                 self.connection.execute(f"ALTER TABLE media ADD COLUMN {name} {declaration}")
+        if 'size_bytes' not in {row[1] for row in self.connection.execute("PRAGMA table_info(manga_items)")}:
+            self.connection.execute("ALTER TABLE manga_items ADD COLUMN size_bytes INTEGER")
         saved_columns={row[1] for row in self.connection.execute("PRAGMA table_info(saved_titles)")}
         if "scope" not in saved_columns:
             self.connection.executescript("""ALTER TABLE saved_titles RENAME TO saved_titles_legacy;
@@ -417,7 +420,8 @@ class Database:
     def upsert_media(self, anime_id, parsed):
         override = self.connection.execute("SELECT kind FROM overrides WHERE path=?", (str(parsed.path),)).fetchone()
         kind = override[0] if override else parsed.kind
-        modified = parsed.path.stat().st_mtime
+        file_info = parsed.path.stat()
+        modified = file_info.st_mtime
         current=self.connection.execute("SELECT id FROM media WHERE path=?",(str(parsed.path),)).fetchone()
         if current is None:
             relocated=self.connection.execute("""SELECT id,path FROM media WHERE anime_id=? AND present=0 AND kind=?
@@ -425,17 +429,17 @@ class Database:
               (anime_id,kind,parsed.season,parsed.episode)).fetchall()
             if len(relocated)==1:
                 old_path=relocated[0]["path"]
-                self.connection.execute("""UPDATE media SET path=?,kind=?,season=?,episode=?,detected_kind=?,present=1,modified=? WHERE id=?""",
-                                        (str(parsed.path),kind,parsed.season,parsed.episode,parsed.kind,modified,relocated[0]["id"]))
+                self.connection.execute("""UPDATE media SET path=?,kind=?,season=?,episode=?,detected_kind=?,present=1,modified=?,size_bytes=? WHERE id=?""",
+                                        (str(parsed.path),kind,parsed.season,parsed.episode,parsed.kind,modified,file_info.st_size,relocated[0]["id"]))
                 self.connection.execute("UPDATE overrides SET path=? WHERE path=?",(str(parsed.path),old_path))
                 return
-        self.connection.execute("""INSERT INTO media(anime_id,path,kind,season,episode,detected_kind,present,modified)
-          VALUES(?,?,?,?,?,?,1,?) ON CONFLICT(path) DO UPDATE SET anime_id=excluded.anime_id,
+        self.connection.execute("""INSERT INTO media(anime_id,path,kind,season,episode,detected_kind,present,modified,size_bytes)
+          VALUES(?,?,?,?,?,?,1,?,?) ON CONFLICT(path) DO UPDATE SET anime_id=excluded.anime_id,
           kind=CASE WHEN EXISTS(SELECT 1 FROM overrides WHERE path=excluded.path)
                THEN (SELECT kind FROM overrides WHERE path=excluded.path) ELSE excluded.kind END,
           season=excluded.season,episode=excluded.episode,detected_kind=excluded.detected_kind,
-          present=1,modified=excluded.modified""",
-          (anime_id, str(parsed.path), kind, parsed.season, parsed.episode, parsed.kind, modified))
+          present=1,modified=excluded.modified,size_bytes=excluded.size_bytes""",
+          (anime_id, str(parsed.path), kind, parsed.season, parsed.episode, parsed.kind, modified, file_info.st_size))
 
     def finish_scan(self):
         self.connection.execute("DELETE FROM media WHERE present=0")
