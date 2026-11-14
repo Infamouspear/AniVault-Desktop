@@ -14,9 +14,9 @@ New guided AniList linking requires the publisher's public numeric client ID;
 use `-AniListClientId` for a publisher build. Do not pass a token or secret.
 The existing Windows workflow intentionally requires the configured client ID.
 
-The release repository is intentionally unset in this candidate. Once the
-existing Infamouspear desktop repository is verified, configure
-`RELEASE_REPOSITORY` in `anime_hub/updates.py`. Settings can check on demand
+The source now targets the verified public Infamouspear/AniVault-Desktop
+repository. The previously packaged offline candidate has no release feed.
+Settings can check on demand
 or automatically when opened. It only accepts published stable releases with
 a matching versioned installer and GitHub SHA-256 digest. It opens the release
 in a browser; AniVault never downloads or launches the installer.

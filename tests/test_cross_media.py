@@ -199,7 +199,7 @@ def test_runtime_restricted_planning_links_after_local_match(window,tmp_path):
     w.show_status_list('Planning','restricted');qt.processEvents();assert w.stack.currentWidget().findChild(SeasonCard)
     rsid,_=manga(w.db,w.manga_store,tmp_path/'PrivateManga',44,'restricted')
     w.show_home();w.show_status_list('Planning','restricted');qt.processEvents()
-    card=w.stack.currentWidget().findChild(MangaCard);assert any('In Vault' in label.text() for label in card.findChildren(QLabel))
+    card=w.stack.currentWidget().findChild(MangaCard);assert card is not None and card.row['id']==rsid and 'In Vault' in card.toolTip()
     QTest.mouseDClick(card,Qt.LeftButton);qt.processEvents();assert w.current_manga_id==rsid
 
 

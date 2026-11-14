@@ -20,7 +20,11 @@ def row():
 
 def test_cards_are_streaming_scale():
     qt_app(); poster=Card(row(),show_progress=True); wide=WideCard(row(),next_episode=5)
-    assert poster.width()>=228 and poster.height()>=390
+    art=next(label for label in poster.findChildren(QLabel) if label.text()=="NO ARTWORK")
+    assert art.width()*3==art.height()*2
+    assert poster.width()-art.width()<=16
+    assert poster.findChild(QProgressBar).value()==4
+    assert poster.findChild(QProgressBar).height()<=4
     assert wide.width()>=470 and wide.height()>=174
 
 

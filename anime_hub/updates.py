@@ -3,7 +3,7 @@ import json
 import re
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-RELEASE_REPOSITORY = ""
+RELEASE_REPOSITORY = "Infamouspear/AniVault-Desktop"
 _VERSION = re.compile(r"v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-rc\.([1-9][0-9]*))?")
 _REPOSITORY = re.compile(r"[A-Za-z0-9-]+/[A-Za-z0-9_.-]+")
 
