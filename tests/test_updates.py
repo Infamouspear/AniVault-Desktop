@@ -43,3 +43,28 @@ def test_offline_check_does_not_retry_or_redirect(monkeypatch):
     monkeypatch.setattr(updates, "build_opener", lambda handler: Offline())
     with pytest.raises(URLError):
         updates.check_release(REPO, "1.1.2")
+
+@pytest.mark.parametrize("corrupt", [False, True])
+def test_download_verifies_bytes_and_cleans_up(monkeypatch, tmp_path, release, corrupt):
+    import hashlib
+    import io
+    import tempfile
+    repo = updates.RELEASE_REPOSITORY
+    target = f"https://github.com/{repo}/releases/tag/{TAG}"
+    payload = b"test installer bytes"
+    digest = hashlib.sha256(payload).hexdigest()
+    folder = tmp_path / "download"
+    folder.mkdir()
+    monkeypatch.setattr(tempfile, "mkdtemp", lambda **kwargs: str(folder))
+    class FixtureOpener:
+        def open(self, url, timeout):
+            assert url == f"https://github.com/{repo}/releases/download/{TAG}/{NAME}"
+            return io.BytesIO(payload if not corrupt else payload + b"changed")
+    monkeypatch.setattr(updates, "build_opener", lambda _: FixtureOpener())
+    args = (TAG, target, "", digest)
+    if corrupt:
+        with pytest.raises(ValueError, match="checksum"):
+            updates.download_installer(args)
+        assert not folder.exists()
+    else:
+        assert updates.download_installer(args).read_bytes() == payload

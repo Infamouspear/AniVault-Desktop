@@ -352,6 +352,8 @@ class HubMixin:
         else:
             from .app import ASSET_DIR
             hero=ArtworkHero(ASSET_DIR/'vee.png');hero.branding_scope='normal';hero.setProperty('brandIllustration',True);hero.setMinimumHeight(250);layout=QVBoxLayout(hero);layout.setContentsMargins(30,24,30,24);title=QLabel('Every story has a home.');title.setObjectName('heroTitle');layout.addWidget(title);layout.addWidget(QLabel('Add your local library, or discover your next anime and manga.'));button=QPushButton('Explore Discover');button.clicked.connect(self.show_discover);layout.addWidget(button,0,Qt.AlignLeft);content.addWidget(hero)
+        from .desktop_ui import overview_stats,stats_strip
+        content.addWidget(stats_strip(overview_stats(list(anime.values()),manga)))
         self._home_shelf(content,'Continue Watching',continuing,True)
         added=sorted([e for e in local if e.media_type=='ANIME'],key=lambda e:(e.local.get('added_at') or e.local.get('created_at') or '',e.local['id']),reverse=True);self._home_shelf(content,'Recently Added',added)
         if recent:self._home_shelf(content,'Recently Watched',recent)

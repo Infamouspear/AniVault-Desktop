@@ -78,7 +78,7 @@ def _status_markup(status,text=""):
     prefix=f'<span style="color:{STATUS_COLORS.get(color_key,"#9ba1a6")};font-weight:650">● {status}</span>' if status else ""
     return prefix+(f" <span style='color:#9ba1a6'>• {text}</span>" if prefix and text else text)
 STYLE = """
-QWidget { background:#080c12; color:#f4eef3; font-family:'Segoe UI'; font-size:14px; }
+QWidget { background:#090b10; color:#f4eef3; font-family:'Segoe UI'; font-size:14px; }
 QLabel { background:transparent; }
 QFrame#sidebar { background:#0b111a; border-right:1px solid #20293a; }
 QFrame#card,QFrame#wideCard,QFrame#panel { background:#101823; border:1px solid #263246; border-radius:12px; }
@@ -88,7 +88,7 @@ QFrame#card[posterCard="true"] {background:transparent;border:1px solid transpar
 QFrame#card[posterCard="true"]:hover,QFrame#card[posterCard="true"]:focus {border-color:#815574;background:#171925;}
 QFrame#card[posterCard="true"][focusPinned="true"] {border-color:#ff5a8b;background:#1a1825;}
 QFrame#card[selected="true"] { border:2px solid #ff5a8b; background:#171825; }
-QPushButton { background:#182130; border:1px solid #2d394d; border-radius:8px; padding:9px 14px; }
+QPushButton { background:#171b24; border:1px solid #303541; border-radius:12px; padding:7px 12px; }
 QPushButton:hover { background:#252f42; border-color:#6f577e; }
 QPushButton#primary { background:#ff3f78; color:white; border:0; font-weight:600; }
 QPushButton#primary:hover { background:#ff5a8b; }
@@ -110,6 +110,14 @@ QLabel#brand { font-size:25px; font-weight:750; color:#ffffff; }
 QLabel#tagline,QLabel#muted { color:#9aa6b6; }
 QLabel#eyebrow { color:#ff5a8b; font-size:12px; font-weight:700; }
 QLabel#title { font-size:32px; font-weight:750; }
+QFrame#overviewStats { background:#121720; border:1px solid #2b303c; border-radius:14px; }
+QLabel#statValue { font-size:24px; font-weight:750; }
+QFrame#sidebar[compact="true"] QPushButton#nav {text-align:center;padding:6px;}
+QPushButton#localProfile {background:transparent;border:0;padding:0;}
+QPushButton#filterChip {border-radius:14px;padding:5px 11px;background:transparent;border-color:transparent;}
+QPushButton#filterChip:hover {border-color:#535060;}
+QPushButton#filterChip:checked {background:#342635;border-color:#85516c;color:#ffbad0;}
+QComboBox QAbstractItemView {background:#171b24;border:1px solid #414657;selection-background-color:#593048;outline:0;}
 QLabel#heroTitle { font-size:36px; font-weight:750; }
 QLabel#section { font-size:21px; font-weight:650; }
 QLabel#cardTitle { font-weight:650; font-size:15px; }
@@ -870,28 +878,59 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
 
     def _build_sidebar(self):
         sidebar=SidebarFrame(); sidebar.setFixedWidth(216); layout=QVBoxLayout(sidebar); layout.setContentsMargins(16,14,16,14); layout.setSpacing(2)
+        labels=[]
+        toggle=QPushButton();toggle.setIcon(outline_icon("chevron-left"));toggle.setToolTip("Expand or collapse navigation");layout.addWidget(toggle)
         def nav(key,text,slot):
-            button=QPushButton(text.split("   ")[-1]); button.setIcon(outline_icon(NAV_ICONS[key],ratio=self.devicePixelRatioF())); button.setIconSize(QSize(18,18)); button.setObjectName("nav"); button.setProperty("active",False); button.setMinimumHeight(40); button.clicked.connect(lambda _checked=False,action=slot:action()); layout.addWidget(button); self.nav_buttons[key]=button; return button
+            button=QPushButton(text.split("   ")[-1]); button.setIcon(outline_icon(NAV_ICONS.get(key,"bookmark"),ratio=self.devicePixelRatioF())); button.setIconSize(QSize(18,18)); button.setObjectName("nav"); button.setProperty("active",False); button.setMinimumHeight(40); button.clicked.connect(lambda _checked=False,action=slot:action()); layout.addWidget(button); self.nav_buttons[key]=button; return button
         def section(text):
             if layout.count():layout.addSpacing(7)
-            label=QLabel(text); label.setObjectName("eyebrow"); layout.addWidget(label)
+            label=QLabel(text); label.setObjectName("eyebrow"); layout.addWidget(label);labels.append(label)
         section("PRIMARY"); nav("home","⌂   Home",self.show_home)
         nav("all","▦   Anime",self.show_library);nav("manga","▤   Manga",lambda:self.show_manga_library());nav("watching","▶   Continue Watching",lambda:self.show_library(state_filter="In Progress"));nav("recent","＋   Recently Added",lambda:self.show_library(sort_mode="Recently Added"));nav("favorites","♡   Favorites",self.show_favorites)
         section("DISCOVER");nav("discover","✦   Discover",self.show_discover);nav("airing","◫   Airing / Upcoming",self.show_airing)
         section("ORGANIZE");nav("planning","◇   Planning",lambda:self.show_status_list("Planning","normal"));nav("collections","▤   Collections",lambda:self.show_collections("normal"));nav("status_hub","◉   Status Hub",self.show_status_hub)
-        section("SYSTEM");nav("downloads","↓   Downloads",self.show_downloads);nav("settings","⚙   Settings",self.show_settings)
+        section("SYSTEM");nav("requests","Requests && Feedback",self.show_requests);nav("downloads","↓   Downloads",self.show_downloads);nav("settings","⚙   Settings",self.show_settings)
         layout.addSpacing(7); self.restricted_label=QLabel("RESTRICTED"); self.restricted_label.setObjectName("eyebrow"); layout.addWidget(self.restricted_label); self.restricted_button=nav("restricted","◆   Restricted Archive",self.show_restricted_home)
         unlocked=self.db.setting("restricted_unlocked","0")=="1";self.restricted_label.setVisible(unlocked);self.restricted_button.setVisible(unlocked)
         layout.addStretch()
         self.rescan_button=QPushButton("Rescan Library"); self.rescan_button.setIcon(outline_icon("refresh-cw",ratio=self.devicePixelRatioF())); self.rescan_button.setObjectName("rescanButton");self.rescan_button.clicked.connect(self.rescan); layout.addWidget(self.rescan_button);QTimer.singleShot(0,sidebar._layout_art)
+        from .desktop_ui import avatar, choose_avatar
+        profile=QPushButton();profile.setIconSize(QSize(36,36));profile.setToolTip("Choose local profile image")
+        profile.setAccessibleName("Choose local profile image");profile.setObjectName("localProfile")
+        profile.clicked.connect(lambda:choose_avatar(self,profile,ASSET_DIR));layout.addWidget(profile)
+        avatar(self,profile,ASSET_DIR)
+        names={key:button.text() for key,button in self.nav_buttons.items()}
+        for key,button in self.nav_buttons.items():
+            button.setToolTip(names[key]);button.setAccessibleName(names[key])
+        def apply(collapsed):
+            sidebar.setFixedWidth(64 if collapsed else 216)
+            sidebar.setProperty("compact",collapsed)
+            toggle.setIcon(outline_icon("chevron-right" if collapsed else "chevron-left"))
+            layout.setContentsMargins(8 if collapsed else 14,10,8 if collapsed else 14,10)
+            for key,button in self.nav_buttons.items():button.setText("" if collapsed else names[key])
+            for label in labels:label.setVisible(not collapsed)
+            self.rescan_button.setText("" if collapsed else "Rescan Library")
+            self.rescan_button.setToolTip("Rescan Library")
+            sidebar.style().unpolish(sidebar);sidebar.style().polish(sidebar)
+            sidebar._layout_art()
+        apply(self.db.setting("compact_navigation","0")=="1")
+        def flip():
+            value=not sidebar.property("compact")
+            self.db.set_setting("compact_navigation",int(value));apply(value)
+        toggle.clicked.connect(flip)
         return sidebar
+
+    def show_requests(self):
+        from .desktop_ui import requests_page
+        self.current_view="requests";self.current_anime_id=None
+        self._set_active_nav("requests");self.replace(requests_page(self))
 
     def _set_active_nav(self,key):
         key=("planning" if self.current_status_name=="Planning" else "status_hub") if key=="collections" and self.current_view=="status_list" else "status_hub" if key in {"unwatched","completed"} else key
         key={"saved":"discover","franchises":"collections"}.get(key,key)
         self.active_nav_key=key
         for name,button in self.nav_buttons.items():
-            button.setProperty("active",name==key); button.setIcon(outline_icon(NAV_ICONS[name],name==key,self.devicePixelRatioF())); button.style().unpolish(button); button.style().polish(button); button.update()
+            button.setProperty("active",name==key); button.setIcon(outline_icon(NAV_ICONS.get(name,"bookmark"),name==key,self.devicePixelRatioF())); button.style().unpolish(button); button.style().polish(button); button.update()
 
     def replace(self, widget):
         if self.manga_reader_page is not None and widget is not self.manga_reader_page:
@@ -982,7 +1021,7 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
 
     def _dispatch_route(self,route):
         kind=route[0]
-        actions={"status_hub":self.show_status_hub,"home":self.show_home,"settings":self.show_settings,"airing":self.show_airing,"downloads":self.show_downloads,
+        actions={"requests":self.show_requests,"status_hub":self.show_status_hub,"home":self.show_home,"settings":self.show_settings,"airing":self.show_airing,"downloads":self.show_downloads,
                  "collections":self.show_collections,"franchises":self.show_franchises,"discover":self.show_discover,"saved":self.show_saved}
         if kind=='library_franchise':self.show_library_franchise(route[1],route[2])
         elif kind=="global_search":self.show_global_search(route[1],route[2])
@@ -1947,7 +1986,12 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
             if resume:QTimer.singleShot(0,resume)
             _append_playback_log(f"LibraryPage reused=true elapsed_ms={(time.perf_counter()-navigation_started)*1000:.0f}");return
         page=QWidget(); outer=QVBoxLayout(page); outer.setContentsMargins(22,18,22,18); self._top_header(outer)
-        title=QLabel(requested); title.setObjectName("title"); outer.addWidget(title)
+        from .hub_ui import ArtworkHero
+        overview=ArtworkHero();overview.setMinimumHeight(96)
+        overview_layout=QVBoxLayout(overview);overview_layout.setContentsMargins(18,10,18,12)
+        eyebrow=QLabel("YOUR LIBRARY");eyebrow.setObjectName("eyebrow");overview_layout.addWidget(eyebrow)
+        title=QLabel(requested); title.setObjectName("title");overview_layout.addWidget(title)
+        overview_layout.addStretch();outer.addWidget(overview)
         controls=QHBoxLayout(); search=QLineEdit(search_text); search.setPlaceholderText("Search your library…"); controls.addWidget(search)
         category=QComboBox(); category.addItems(["All categories","Watching","Airing","Unwatched","Finished","Movies","Other"]); controls.addWidget(category); outer.addLayout(controls)
         state=QComboBox(); state.addItems(["All states","Watched","Unwatched","In Progress","Completed","Has Extras","Favorites"]); controls.addWidget(state)
@@ -1965,6 +2009,36 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
             cache_state="first load" if requested not in self._view_loads else "rebuilt"
         else: rows=self._library_rows_cache
         status_map={r['entity_key']:r['status'] for r in self.db.connection.execute("SELECT entity_key,status FROM manual_status WHERE scope='normal'")}
+        from .library_franchises import metadata as library_metadata
+        catalog={row['id']:library_metadata(row) for row in rows if self.db.anime_scope(row)=='normal'}
+        if key=="all":
+            backdrop=next((item.get('banner_path') or item.get('cover_path') for item in catalog.values()
+                           if item.get('banner_path') or item.get('cover_path')),None)
+            if backdrop:
+                overview.banner.setPixmap(_scaled_artwork(backdrop,1000,150))
+        genres={genre for item in catalog.values() for genre in (item.get('genres') or []) if isinstance(genre,str)}
+        filters=QHBoxLayout()
+        format_filter=QComboBox();format_filter.addItems(['All formats']+sorted({str(item['format']) for item in catalog.values() if item.get('format')}))
+        year_filter=QComboBox();year_filter.addItems(['All years']+sorted({str(item['seasonYear']) for item in catalog.values() if item.get('seasonYear')},reverse=True))
+        genre_filter=QComboBox();genre_filter.addItems(['All genres']+sorted(genres))
+        for control in (format_filter,year_filter):filters.addWidget(control)
+        genre_filter.setParent(page);genre_filter.hide()
+        filters.addStretch();outer.addLayout(filters)
+        from PySide6.QtWidgets import QButtonGroup
+        status_group=QButtonGroup(page);status_chips=QHBoxLayout()
+        for value in ('All','Watching','Planning','Paused','Completed','Dropped'):
+            chip=QPushButton(value);chip.setObjectName('filterChip');chip.setCheckable(True)
+            status_group.addButton(chip);status_chips.addWidget(chip);chip.setChecked(value=='All')
+        status_chips.addStretch();outer.addLayout(status_chips)
+        genre_strip=QScrollArea();genre_strip.setWidgetResizable(True);genre_strip.setFixedHeight(48)
+        genre_strip.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        genre_body=QWidget();genre_layout=QHBoxLayout(genre_body);genre_layout.setContentsMargins(0,0,0,0)
+        genre_group=QButtonGroup(page)
+        for index in range(genre_filter.count()):
+            chip=QPushButton(genre_filter.itemText(index));chip.setObjectName("filterChip");chip.setCheckable(True)
+            genre_group.addButton(chip,index);genre_layout.addWidget(chip);chip.setChecked(index==0)
+        genre_group.idClicked.connect(genre_filter.setCurrentIndex)
+        genre_layout.addStretch();genre_strip.setWidget(genre_body);outer.addWidget(genre_strip)
         def row_key(row):return 'anilist:'+str(row['anilist_id']) if row['anilist_id'] else 'local:'+str(row['id'])
         old=self._library_page_cache.get(page_key)
         if old and old[0] is not self.stack.currentWidget() and isValid(old[0]):self.stack.removeWidget(old[0]);old[0].deleteLater()
@@ -1982,6 +2056,14 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
             prepared_started=time.perf_counter()
             visible=[r for r in rows if self.db.anime_scope(r)=='normal' and search.text().casefold() in self._display_title(r).casefold() and
                      (category.currentIndex()==0 or r["category"].casefold()==category.currentText().casefold()) and self._state_matches(r,state.currentText())]
+            selected=status_group.checkedButton().text()
+            visible=[r for r in visible if
+                (selected=='All' or status_map.get(row_key(r))==selected
+                 or (not status_map.get(row_key(r)) and selected=='Watching' and 0<(r['watched_count'] or 0)<(r['episode_count'] or 0))
+                 or (not status_map.get(row_key(r)) and selected=='Completed' and 0<(r['episode_count'] or 0)<=(r['watched_count'] or 0)))
+                and (format_filter.currentIndex()==0 or catalog[r['id']].get('format')==format_filter.currentText())
+                and (year_filter.currentIndex()==0 or str(catalog[r['id']].get('seasonYear'))==year_filter.currentText())
+                and (genre_filter.currentIndex()==0 or genre_filter.currentText() in (catalog[r['id']].get('genres') or []))]
             key=sort.currentText()
             if key=="Recently Added": visible.sort(key=lambda r:r["added_at"] or "",reverse=True)
             elif key=="Recently Watched": visible.sort(key=lambda r:r["last_watched_at"] or "",reverse=True)
@@ -2019,6 +2101,8 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
             if not visible:grid.add_card(self._empty_state('results' if search.text() or category.currentIndex() or state.currentIndex() else 'empty','No matching anime.' if rows else 'Nothing here yet.',copy='Change filters or add your local library.'))
             else:add_batch()
         search.textChanged.connect(rebuild); category.currentTextChanged.connect(rebuild); state.currentTextChanged.connect(rebuild); sort.currentTextChanged.connect(rebuild)
+        for control in (format_filter,year_filter,genre_filter):control.currentIndexChanged.connect(rebuild)
+        status_group.buttonClicked.connect(rebuild)
         page.refresh_franchises=rebuild
         def view_changed():
             self.library_context['view_mode']=view.currentText();self.db.set_setting('library_view_mode',view.currentText());rebuild()
@@ -2541,34 +2625,66 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         try: schema=json.loads((APP_DIR/'release-state.json').read_text()).get('schema_fingerprint','unknown')[:12]
         except (OSError,ValueError):schema='unknown'
         release=QLabel("AniVault "+APP_VERSION+" • Build "+APP_VERSION+" • Schema fingerprint "+schema+"\nUser data: "+str(APP_DIR));release.setObjectName("muted");release.setWordWrap(True);layout.addWidget(release)
-        from .updates import RELEASE_REPOSITORY, check_release, release_index
+        from .updates import RELEASE_REPOSITORY, check_release, release_index, download_installer, launch_installer_after_exit
         updates=QLabel("Application updates");updates.setObjectName("section");layout.addWidget(updates)
         status=QLabel("Installed: "+APP_VERSION);status.setTextFormat(Qt.PlainText);status.setWordWrap(True);layout.addWidget(status)
         actions=QHBoxLayout();check=QPushButton("Check for updates");open_release=QPushButton("Open GitHub Releases")
-        actions.addWidget(check);actions.addWidget(open_release);actions.addStretch();layout.addLayout(actions)
+        install=QPushButton("Install update");install.hide()
+        actions.addWidget(check);actions.addWidget(install);actions.addWidget(open_release);actions.addStretch();layout.addLayout(actions)
         import concurrent.futures
         from urllib.error import HTTPError
         check.setEnabled(bool(RELEASE_REPOSITORY));open_release.setEnabled(bool(RELEASE_REPOSITORY))
         target=[release_index(RELEASE_REPOSITORY) if RELEASE_REPOSITORY else ""]
         open_release.clicked.connect(lambda:QDesktopServices.openUrl(QUrl(target[0])))
-        timer=QTimer(page);timer.setInterval(150)
-        pending=[]
+        timer=QTimer(self);timer.setInterval(150)
+        pending=[];available=[];installing=[False]
+        page.destroyed.connect(lambda:timer.deleteLater() if not installing[0] else None)
         def finished():
             if not pending or not pending[0].done():return
-            timer.stop();check.setEnabled(True)
+            timer.stop()
+            if isValid(check):check.setEnabled(True)
             try:
                 result=pending.pop().result()
+                if installing[0]:
+                    try:
+                        launch_installer_after_exit(result,available[0][3])
+                    except (OSError,ValueError):
+                        from shutil import rmtree
+                        rmtree(result.parent,ignore_errors=True)
+                        raise
+                    self._update_downloading=False
+                    self.close()
+                    return
                 if result:
+                    available[:]=[result]
+                    install.setVisible(sys.platform=="win32" and getattr(sys,"frozen",False))
                     tag,url,notes,digest=result;target[0]=url
-                    status.setText(f"Installed: {APP_VERSION}\nAvailable: {tag}\n{notes}\n\nCompare the downloaded installer SHA-256 before opening it:\n{digest}")
+                    status.setText(f"Installed: {APP_VERSION}\nAvailable: {tag}\n{notes}")
                 else:status.setText(f"Installed: {APP_VERSION} · Up to date")
             except HTTPError as exc:
-                status.setText("Release information is unavailable. For a private repository, sign in on GitHub and use Open GitHub Releases." if exc.code in (401,403,404) else f"GitHub returned HTTP {exc.code}. Try again later.")
+                if isValid(status):status.setText("Release information is unavailable. For a private repository, sign in on GitHub and use Open GitHub Releases." if exc.code in (401,403,404) else f"GitHub returned HTTP {exc.code}. Try again later.")
             except (OSError,ValueError) as exc:
-                status.setText(f"Could not check for updates: {exc}")
+                if isValid(status):status.setText(f"Update failed: {exc}")
+                elif not self._closing:AniVaultDialog.alert(self,"Update failed",str(exc))
+            finally:
+                if installing[0]:self._update_downloading=False
+                installing[0]=False
+                if isValid(install):install.setEnabled(True)
+                else:timer.deleteLater()
+        def start_install():
+            if pending or not available or getattr(self,'_update_downloading',False):return
+            installing[0]=True
+            self._update_downloading=True
+            status.setText("Downloading and verifying update…")
+            install.setEnabled(False);check.setEnabled(False)
+            pool=concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            pending.append(pool.submit(download_installer,available[0]))
+            pool.shutdown(wait=False);timer.start()
+        install.clicked.connect(start_install)
         timer.timeout.connect(finished)
         def start_check():
             if pending or not RELEASE_REPOSITORY:return
+            available.clear();install.hide()
             check.setEnabled(False);status.setText(f"Installed: {APP_VERSION} · Checking…")
             with_pool=concurrent.futures.ThreadPoolExecutor(max_workers=1)
             pending.append(with_pool.submit(check_release,RELEASE_REPOSITORY,APP_VERSION))
@@ -2690,6 +2806,8 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
             worker.deleteLater()
 
     def closeEvent(self,event):
+        if getattr(self,"_update_downloading",False):
+            self.statusBar().showMessage("Wait for the update download to finish.",4000);event.ignore();return
         if getattr(self,'_shutdown_complete',False):event.accept();return
         if not self._closing:
             self.lan_server.shutdown()

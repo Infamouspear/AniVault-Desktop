@@ -1,4 +1,4 @@
-"""Read-only stable-release discovery. Installation stays with the user."""
+"""Stable-release discovery and verified, user-initiated installation."""
 import json
 import re
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -65,3 +65,90 @@ def check_release(repository, current):
     if len(raw) > 1024 * 1024:
         raise ValueError("Release metadata exceeded its size limit")
     return parse_release(json.loads(raw), repository, current)
+
+class AssetRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        from urllib.parse import urlsplit
+        url = urlsplit(newurl)
+        if (url.scheme != "https" or url.netloc not in
+                {"release-assets.githubusercontent.com", "objects.githubusercontent.com"}):
+            raise ValueError("GitHub redirected the installer to an unexpected address")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def download_installer(release):
+    import hashlib
+    import shutil
+    import tempfile
+    import time
+    from pathlib import Path
+
+    tag, url, _, expected = release
+    index = release_index(RELEASE_REPOSITORY)
+    if not version_key(tag)[3] or url != f"{index}/tag/{tag}" or not re.fullmatch(r"[0-9a-f]{64}", expected):
+        raise ValueError("Invalid installer release")
+    filename = f"AniVault-{tag.removeprefix('v')}-Setup.exe"
+    folder = Path(tempfile.mkdtemp(prefix="AniVault-update-")).resolve()
+    path = folder / filename
+    digest = hashlib.sha256()
+    size = 0
+    deadline = time.monotonic() + 600
+    try:
+        with build_opener(AssetRedirect()).open(f"{index}/download/{tag}/{filename}", timeout=20) as response, path.open("xb") as output:
+            while chunk := response.read(256 * 1024):
+                size += len(chunk)
+                if size > 512 * 1024 * 1024 or time.monotonic() > deadline:
+                    raise ValueError("Installer download exceeded its limits")
+                digest.update(chunk)
+                output.write(chunk)
+        if digest.hexdigest() != expected:
+            raise ValueError("Installer checksum did not match GitHub")
+        return path
+    except BaseException:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
+
+
+def launch_installer_after_exit(path, expected):
+    import base64
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    if sys.platform != "win32" or not getattr(sys, "frozen", False):
+        raise ValueError("In-app installation requires the installed Windows build")
+    script = r"""
+$ErrorActionPreference = 'Stop'
+$restart = $false
+try {
+    $old = Get-Process -Id ([int]$env:ANIVAULT_UPDATE_PID) -ErrorAction SilentlyContinue
+    if ($null -ne $old -and -not $old.WaitForExit(120000)) { throw 'AniVault did not close in time.' }
+    $restart = $true
+    if ((Get-FileHash -LiteralPath $env:ANIVAULT_UPDATE_FILE -Algorithm SHA256).Hash -ne $env:ANIVAULT_UPDATE_HASH) {
+        throw 'Installer checksum changed.'
+    }
+    $dir = Split-Path -Parent $env:ANIVAULT_UPDATE_APP
+    $setup = Start-Process -FilePath $env:ANIVAULT_UPDATE_FILE -ArgumentList @(
+        '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS','/NORESTARTAPPLICATIONS',
+        ('/DIR="' + $dir + '"')) -Wait -PassThru
+    if ($setup.ExitCode -ne 0) { throw ('Installer exit code: ' + $setup.ExitCode) }
+} catch {
+    Add-Type -AssemblyName System.Windows.Forms
+    [void][Windows.Forms.MessageBox]::Show($_.Exception.Message,'AniVault update failed')
+} finally {
+    Remove-Item -LiteralPath $env:ANIVAULT_UPDATE_FILE -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Split-Path -Parent $env:ANIVAULT_UPDATE_FILE) -ErrorAction SilentlyContinue
+    if ($restart -and (Test-Path -LiteralPath $env:ANIVAULT_UPDATE_APP)) {
+        $env:PYINSTALLER_RESET_ENVIRONMENT = "1"
+        Start-Process -FilePath $env:ANIVAULT_UPDATE_APP -WorkingDirectory (Split-Path -Parent $env:ANIVAULT_UPDATE_APP)
+    }
+}
+"""
+    encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
+    env = dict(os.environ, ANIVAULT_UPDATE_PID=str(os.getpid()),
+               ANIVAULT_UPDATE_APP=sys.executable, ANIVAULT_UPDATE_FILE=str(path),
+               ANIVAULT_UPDATE_HASH=expected)
+    powershell = Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"
+    subprocess.Popen([str(powershell), "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+                     env=env, creationflags=subprocess.CREATE_NO_WINDOW)
