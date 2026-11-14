@@ -102,13 +102,14 @@ def test_supplied_art_scope_one_main_illustration_and_small_fallback(window):
     assert all(getattr(h,'branding_scope',None)!='restricted' for h in w.stack.currentWidget().findChildren(ArtworkHero))
     splash=startup_splash(qt);assert splash and splash.width()<=640 and splash.height()<=360;splash.close()
 
-def test_franchise_selection_double_open_and_child_details(window,tmp_path):
+def test_franchise_selection_double_open_and_child_details(window,tmp_path,monkeypatch):
     from test_v087 import franchise_fixture
     from anime_hub.polish_ui import CoverListCard
     w,qt,aid,*_=window;franchise_fixture(w,aid,tmp_path);w._library_cache_dirty=True;w.resize(1600,1000);w.show_library(view_mode='Franchises');QTest.qWait(60)
     page=w.stack.currentWidget();card=rendered_card(page,CoverListCard);assert card.property('franchiseLocalIds')
     QTest.mouseClick(card,Qt.LeftButton);assert w.stack.currentWidget() is page and w._hub_pinned
     assert w.context_rail.findChild(QLabel,'focusTitle').text()=='Initial D' and len(w._hub_focus_group['ids'])==2
+    monkeypatch.setattr(w,'_library_franchises',lambda scope='normal': [])
     QTest.mouseDClick(card,Qt.LeftButton);qt.processEvents();assert w.current_view=='library_franchise'
     overview=w.stack.currentWidget();child=rendered_card(overview);QTest.mouseClick(child,Qt.LeftButton);assert w.stack.currentWidget() is overview
     QTest.mouseDClick(child,Qt.LeftButton);assert w.current_view=='detail'

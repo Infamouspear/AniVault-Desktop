@@ -20,7 +20,7 @@ from shiboken6 import isValid
 from PySide6.QtCore import QEvent, Qt, QThread, Signal, QObject, QSize, QStringListModel, QTimer, QUrl, qInstallMessageHandler
 from PySide6.QtGui import QDesktopServices, QColor, QFontMetrics, QIcon, QKeySequence, QLinearGradient, QPainter, QPixmap, QImageReader, QShortcut, QTextLayout, QTextOption
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkDiskCache, QNetworkReply
-from PySide6.QtWidgets import (QApplication, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
+from PySide6.QtWidgets import (QAbstractScrollArea, QApplication, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
     QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPushButton,
     QScrollArea, QStackedWidget, QToolBar, QVBoxLayout, QWidget, QComboBox, QDialog,
     QMenu, QProgressBar, QCheckBox, QSizePolicy, QLayout, QTextEdit, QCompleter)
@@ -1026,6 +1026,18 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         finally:self._history_navigating=False
 
     def eventFilter(self,obj,event):
+        if event.type()==QEvent.Wheel and isinstance(obj,QComboBox) and not obj.view().isVisible():
+            from PySide6.QtGui import QWheelEvent
+            parent=obj.parentWidget()
+            while parent is not None and not isinstance(parent,QAbstractScrollArea):
+                parent=parent.parentWidget()
+            if parent is not None:
+                viewport=parent.viewport()
+                forwarded=QWheelEvent(viewport.mapFromGlobal(event.globalPosition()),event.globalPosition(),
+                    event.pixelDelta(),event.angleDelta(),event.buttons(),event.modifiers(),
+                    event.phase(),event.inverted(),event.source(),event.pointingDevice())
+                QApplication.sendEvent(viewport,forwarded)
+            return True
         if self.current_view!="player" and event.type()==QEvent.MouseButtonPress:
             if event.button()==Qt.BackButton: self.navigate_back(); return True
             if event.button()==Qt.ForwardButton: self.navigate_forward(); return True

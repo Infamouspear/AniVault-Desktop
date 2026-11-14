@@ -89,6 +89,20 @@ def order_titles(rows,edges):
     return sorted(rows,key=lambda row:(positions[row['anilist_id']],date(row)))
 
 
+def franchise_relationship(edges, anchor, title):
+    """Describe the title relative to the first displayed entry."""
+    if title == anchor:
+        return 'First in this group'
+    inverse = {'PREQUEL':'SEQUEL','SEQUEL':'PREQUEL','SIDE_STORY':'PARENT',
+               'SPIN_OFF':'PARENT'}
+    kinds = {kind for source,target,kind in edges if (source,target)==(anchor,title)}
+    kinds.update(inverse[kind] for source,target,kind in edges
+                 if (source,target)==(title,anchor) and kind in inverse)
+    if 'PARENT' in kinds and kinds & {'SIDE_STORY','SPIN_OFF'}:
+        return 'Related'
+    return next(iter(kinds)).replace('_',' ').title() if len(kinds)==1 else 'Related'
+
+
 class LibraryFranchiseMixin:
     def _library_franchises(self,scope='normal'):
         self._load_library_relations()
@@ -157,38 +171,49 @@ class LibraryFranchiseMixin:
         card=CoverListCard(group.name,f'{len(group.rows)} local anime titles',covers,width=184,height=350,art_height=235)
         card.setProperty('posterCard',True);card.count_label.setToolTip(f'{watched}/{total} watched')
         self._register_status_card(card,group.scope,'local:'+str(group.rows[0]['id']))
-        card.setProperty('franchiseName',group.name);card.setProperty('franchiseLocalIds',group.local_ids);card.clicked.connect(lambda:self.show_library_franchise(group.local_ids,group.scope));return card
+        card.setProperty('franchiseName',group.name);card.setProperty('franchiseLocalIds',group.local_ids);card.clicked.connect(lambda:self.show_library_franchise(group.local_ids,group.scope,displayed_group=group));return card
 
-    def show_library_franchise(self,local_ids,scope='normal'):
+    def show_library_franchise(self,local_ids,scope='normal',displayed_group=None):
         if not self._organization_allowed(scope):return
         rows=[row for row in self.db.anime_list() if row['id'] in local_ids and self.db.anime_scope(row)==scope]
-        group=next((g for g in self._library_franchises(scope) if set(local_ids)<=set(g.local_ids)),None)
-        if group is None:
-            if len(rows)==1:self.show_detail(rows[0]['id'])
-            else:self.show_library()
-            return
+        if len(rows)==1:
+            self.show_detail(rows[0]['id']);return
+        if not rows:
+            self.show_library();return
+        candidate=displayed_group
+        if candidate is None:
+            candidate=next((g for g in self._library_franchises(scope) if set(local_ids)<=set(g.local_ids)),None)
+        by_local={row['id']:row for row in rows}
+        if candidate is not None and candidate.scope==scope:
+            ordered=[by_local.pop(i) for i in candidate.local_ids if i in by_local]
+            group=LibraryFranchise(candidate.name,ordered+list(by_local.values()),candidate.edges,scope)
+        else:
+            group=LibraryFranchise('Related library titles',rows,[],scope)
         self.current_view='restricted_library_franchise' if scope=='restricted' else 'library_franchise';self.current_anime_id=None;self.current_library_franchise=(tuple(local_ids),scope);self._set_active_nav('restricted' if scope=='restricted' else 'all')
         page=QWidget();page.setProperty('transientPage',True);outer=QVBoxLayout(page);self._top_header(outer);header=QHBoxLayout();back=QPushButton('← Back');back.clicked.connect(self.navigate_back);header.addWidget(back);title=QLabel(group.name);title.setObjectName('title');header.addWidget(title);header.addStretch();outer.addLayout(header)
         outer.addWidget(QLabel(f'{len(group.rows)} local anime titles · Individual watch state and playback remain separate'))
         from .app import ResponsiveLibraryGrid
         scroll=QScrollArea();scroll.setWidgetResizable(True);host=QWidget();flow=QVBoxLayout(host);flow.setSpacing(10);flow.setContentsMargins(0,0,0,8);grid=ResponsiveLibraryGrid();flow.addWidget(grid)
         store=self.organization(scope)
+        anchor=group.rows[0]['anilist_id']
         for row in group.rows:
             entity=store.resolve('local:'+str(row['id']));card=self._entity_card(entity)
-            relation=' / '.join(sorted({relation.replace('_',' ').title() for source,target,relation in group.edges if source==row['anilist_id']})) or 'Related'
-            label=QLabel(f"{metadata(row).get('format') or 'Anime'} · In Vault · {row['watched_count'] or 0} / {row['episode_count'] or 0} watched\n{entity.status or 'No manual status'} · {relation}");label.setWordWrap(True);label.setObjectName('muted');label.setAlignment(Qt.AlignCenter);card.status_label.setText(relation);card.status_label.setToolTip(label.text());label.deleteLater();grid.add_card(card)
+            relation=franchise_relationship(group.edges,anchor,row['anilist_id'])
+            card.status_label.setText(relation)
+            card.status_label.setToolTip(f"{relation} · {row['watched_count'] or 0}/{row['episode_count'] or 0} watched")
+            grid.add_card(card)
         remote_nodes={}
         local_anilist={row['anilist_id'] for row in group.rows}
         for row in group.rows:
             nodes=[dict(edge.get('node') or {},relationType=edge.get('relationType')) for edge in (metadata(row).get('relations') or {}).get('edges') or [] if edge.get('relationType') in LINKS]
             nodes.extend(getattr(self,'_library_relation_data',{}).get(str(row['anilist_id']),[]))
             for node in nodes:
-                if node.get('type')=='ANIME' and node.get('id') not in local_anilist and (node.get('isAdult') is True)==(scope=='restricted'):remote_nodes[node['id']]=node
+                if node.get('type')=='ANIME' and node.get('id') not in local_anilist and (node.get('isAdult') is True)==(scope=='restricted'):remote_nodes.setdefault(node['id'],{**node,'relationSource':display_title(metadata(row))})
         if remote_nodes:
             title=QLabel('AniList-only related anime');title.setObjectName('section');flow.addWidget(title);remote_grid=ResponsiveLibraryGrid();flow.addWidget(remote_grid)
             for node in sorted(remote_nodes.values(),key=lambda value:(value.get('seasonYear') or 9999,display_title(value))):
                 entity=store.resolve('anilist:'+str(node['id']),node);card=self._entity_card(entity)
                 relation=str(node.get('relationType') or 'Related').replace('_',' ').title()
-                label=QLabel(f"{node.get('format') or 'Anime'} · AniList-only\n{entity.status or 'No manual status'} · {relation}");label.setWordWrap(True);label.setObjectName('muted');label.setAlignment(Qt.AlignCenter)
-                card.note.setText(label.text());label.deleteLater();card.setToolTip('AniList-only · '+relation);remote_grid.add_card(card)
+                label=QLabel(f"{node.get('format') or 'Anime'} · AniList-only\n{entity.status or 'No manual status'} · {relation} relative to {node['relationSource']}");label.setWordWrap(True);label.setObjectName('muted');label.setAlignment(Qt.AlignCenter)
+                card.note.setText(label.text());label.deleteLater();card.setToolTip('AniList-only · '+relation+' relative to '+node['relationSource']);remote_grid.add_card(card)
         flow.addStretch();scroll.setWidget(host);outer.addWidget(scroll);self.replace(page)
