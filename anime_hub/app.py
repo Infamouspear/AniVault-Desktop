@@ -716,6 +716,7 @@ class StatusCountLabel(QLabel):
 
 class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMixin,OrganizationMixin,MangaLibraryMixin,QMainWindow):
     anilist_progress_updated=Signal(int,int,str)
+    personal_rating_changed=Signal()
     manual_status_changed=Signal(str,str,object)
     def __init__(self):
         super().__init__(); startup_started=time.perf_counter(); self._search_suggestions=[]; self._closing=False;self._shutdown_complete=False; APP_DIR.mkdir(parents=True,exist_ok=True); self.db_path=APP_DIR/"anime_hub.db"; self._new_install=not self.db_path.exists(); prepare_existing_database(self.db_path,_append_playback_log); self.db=Database(self.db_path); record_release(self.db,_append_playback_log)
@@ -1986,7 +1987,7 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         scroll.verticalScrollBar().valueChanged.connect(lambda value:load_more() if value>=scroll.verticalScrollBar().maximum()-max(240,scroll.verticalScrollBar().pageStep()//2) else None)
         restart()
 
-    def show_library(self,checked=False,category_filter=None,state_filter=None,sort_mode=None,search_text="",view_mode=None):
+    def show_library(self,checked=False,category_filter=None,state_filter=None,sort_mode=None,search_text="",view_mode=None,genre=None):
         stamp=self.db.change_stamp()
         if getattr(self,'_library_data_stamp',None)!=stamp:
             self._library_cache_dirty=True;self._library_data_stamp=stamp
@@ -2001,7 +2002,7 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         self._load_library_relations()
         view_mode=view_mode or self.db.setting('library_view_mode','Franchises')
         self.library_context['view_mode']=view_mode
-        page_key=(category_filter,state_filter,sort_mode,search_text,view_mode,self._library_relation_revision)
+        page_key=(category_filter,state_filter,sort_mode,search_text,view_mode,genre,self._library_relation_revision)
         cached=self._library_page_cache.get(page_key)
         if cached and isValid(cached[0]) and cached[1]==self.db.connection.total_changes and not self._library_cache_dirty:
             self.replace(cached[0]);resume=getattr(cached[0],'resume_population',None)
@@ -2017,7 +2018,7 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         subtitle=QLabel("Browse and manage your anime collection");subtitle.setObjectName("muted");overview_layout.addWidget(subtitle);outer.addWidget(overview)
         controls=CompactFilterLayout(38); search=QLineEdit(search_text); search.setPlaceholderText("Search your library…"); decorate_search(search);search.setMinimumWidth(170);controls.addWidget(search)
         category=QComboBox(); category.addItems(["All categories","Watching","Airing","Unwatched","Finished","Movies","Other"]); controls.addWidget(category); outer.addLayout(controls)
-        state=QComboBox(); state.addItems(["All states","Watched","Unwatched","In Progress","Completed","Has Extras","Favorites"]); controls.addWidget(state)
+        state=QComboBox(); state.addItems(["All states","Watched","Unwatched","In Progress","Completed","Has Extras","Favorites","Unrated"]); controls.addWidget(state)
         sort=QComboBox(); sort.addItems(["Title A-Z","Recently Added","Recently Watched","Progress","Year"]); controls.addWidget(sort)
         if category_filter and category.findText(category_filter)>=0: category.setCurrentText(category_filter)
         if state_filter and state.findText(state_filter)>=0: state.setCurrentText(state_filter)
@@ -2059,6 +2060,8 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
             chip=QPushButton(genre_filter.itemText(index));chip.setObjectName("filterChip");chip.setCheckable(True)
             genre_group.addButton(chip,index);genre_layout.addWidget(chip);chip.setChecked(index==0)
         genre_group.idClicked.connect(genre_filter.setCurrentIndex)
+        if genre and genre_filter.findText(genre)>0:
+            genre_filter.setCurrentText(genre);genre_group.button(genre_filter.currentIndex()).setChecked(True)
         genre_layout.addStretch();genre_strip.setWidget(genre_body);outer.addWidget(genre_strip)
         def row_key(row):return 'anilist:'+str(row['anilist_id']) if row['anilist_id'] else 'local:'+str(row['id'])
         old=self._library_page_cache.get(page_key)
@@ -2076,7 +2079,7 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
             grid.clear_cards()
             prepared_started=time.perf_counter()
             visible=[r for r in rows if self.db.anime_scope(r)=='normal' and search.text().casefold() in self._display_title(r).casefold() and
-                     (category.currentIndex()==0 or r["category"].casefold()==category.currentText().casefold()) and self._state_matches(r,state.currentText())]
+                     (category.currentIndex()==0 or r["category"].casefold()==category.currentText().casefold()) and (r["personal_rating_units"] is None if state.currentText()=="Unrated" else self._state_matches(r,state.currentText()))]
             selected=status_group.checkedButton().text()
             visible=[r for r in visible if
                 (selected=='All' or status_map.get(row_key(r))==selected
@@ -2460,7 +2463,7 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         if next_episode:
             continue_button=QPushButton(f"▶  Continue Episode {next_episode['episode']}"); continue_button.setObjectName("primary"); continue_button.clicked.connect(lambda:self.continue_episode(anime_id)); actions.addWidget(continue_button)
         folder=QPushButton("▣  Open Folder"); folder.clicked.connect(lambda:self.open_folder(anime["root_path"])); actions.addWidget(folder)
-        favorite=QPushButton("♥  Favorited" if anime["favorite"] else "♡  Favorite"); favorite.clicked.connect(lambda:self.toggle_favorite(anime_id,not anime["favorite"])); actions.addWidget(favorite);actions.addWidget(self._detail_collections_button(scope,anime_id=anime_id)); actions.addStretch(); content.addLayout(actions); hero_layout.addLayout(content,1); outer.addWidget(hero)
+        favorite=QPushButton("♥  Favorited" if anime["favorite"] else "♡  Favorite"); favorite.clicked.connect(lambda:self.toggle_favorite(anime_id,not anime["favorite"])); actions.addWidget(favorite);actions.addWidget(self._detail_collections_button(scope,anime_id=anime_id)); actions.addStretch(); content.addLayout(actions); from .ratings import rating_control; content.addWidget(rating_control(self,scope,"ANIME",anime_id)); hero_layout.addLayout(content,1); outer.addWidget(hero)
 
         content.addWidget(self._direct_status_controls(scope,anime_id=anime_id))
         collection_ids=self.db.anime_collection_ids(anime_id);chips=QHBoxLayout()

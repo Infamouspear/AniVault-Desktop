@@ -158,6 +158,9 @@ class DetailRail(QFrame):
                 self.window._select_hub_entity(entity.scope,entity.key,entity.item)
             favorite.clicked.connect(toggle_favorite);quick.addWidget(favorite)
         quick.addWidget(self.window._detail_collections_button(entity.scope,anime_id=local['id'] if local and entity.media_type=='ANIME' else None,manga_id=local['id'] if local and entity.media_type=='MANGA' else None,item=item if not local else None));layout.addLayout(quick)
+        if local:
+            from .ratings import rating_control
+            layout.addWidget(rating_control(self.window,entity.scope,entity.media_type,local["id"]))
         count=item.get('chapters') if entity.media_type=='MANGA' else item.get('episodes');unit='chapters' if entity.media_type=='MANGA' else 'episodes'
         metadata=' · '.join(str(v) for v in [str(item.get('format') or entity.media_type).replace('_',' ').title(),item.get('seasonYear') or (item.get('startDate') or {}).get('year'),f'{count} {unit}' if count else None] if v)
         meta=QLabel(metadata);meta.setObjectName('muted');meta.setStyleSheet('font-size:12px;color:#9795a7');layout.addWidget(meta)
@@ -416,16 +419,15 @@ class HubMixin:
         return anime,manga,episodes,data
 
     def show_statistics(self):
-        from .dashboard import measures
-        from .desktop_ui import stats_strip
+        from .dashboard import analytics
         self.current_view='statistics';self.current_anime_id=None;self._set_active_nav('statistics')
         page=QWidget();page.setProperty('transientPage',True);shell=QVBoxLayout(page)
         scroll=QScrollArea();scroll.setWidgetResizable(True);shell.addWidget(scroll)
         body=QWidget();layout=QVBoxLayout(body);layout.setContentsMargins(22,18,22,18)
         title=QLabel('Statistics');title.setObjectName('title');layout.addWidget(title)
-        data=self._dashboard_data()[3]
-        layout.addWidget(stats_strip(data['summary']+(('Storage',data['storage']),)))
-        layout.addWidget(measures(data));layout.addStretch();scroll.setWidget(body);self.replace(page)
+        anime,manga,_,data=self._dashboard_data()
+        layout.addWidget(analytics(self,data,list(anime.values()),manga))
+        layout.addStretch();scroll.setWidget(body);self.replace(page)
 
     def show_home(self):
         from .desktop_ui import stats_strip
@@ -461,7 +463,11 @@ class HubMixin:
         self._home_shelf(content,'Recently Added',added,shortcut=lambda:self.show_library(sort_mode='Recently Added'))
         reading=sorted((e for e in manga if e.local.get('active_item_id')),key=lambda e:e.local.get('last_read') or '',reverse=True)
         if reading:self._home_shelf(content,'Continue Reading',reading,True)
-        content.addWidget(measures(data,True));content.addStretch();scroll.setWidget(body);outer.addWidget(scroll);self.replace(page)
+        insights=measures(data,True)
+        scores=[e.local.get('personal_rating_units') for e in [*anime.values(),*manga]]
+        scores=[n for n in scores if n is not None]
+        if scores:insights.layout().addWidget(QLabel(f"Personal ratings · {sum(scores)/len(scores)/2:.2f} average · {len(scores)} rated"))
+        content.addWidget(insights);content.addStretch();scroll.setWidget(body);outer.addWidget(scroll);self.replace(page)
         if featured:self._select_hub_entity('normal',featured.key)
 
     def show_status_hub(self):

@@ -30,6 +30,7 @@ with tempfile.TemporaryDirectory(prefix='anivault-preview-') as temp:
         paint.end();path=Path(temp)/f'art-{i}.jpg';image.save(str(path))
         aid=db.upsert_anime('preview-'+str(i),title,'','Watching',temp)
         db.set_metadata(aid,1000+i,{'title':{'english':title},'cover_path':str(path),'genres':['Adventure','Drama'],'description':'A synthetic library entry for testing the new artwork layout.'})
+        if i<6:db.set_personal_rating('ANIME',aid,4.5+i)
         if i<4:
             from types import SimpleNamespace
             for episode in range(1,5):
@@ -41,11 +42,15 @@ with tempfile.TemporaryDirectory(prefix='anivault-preview-') as temp:
     db.connection.commit();db.connection.close()
     if len(sys.argv)>2: db=app.Database(app.APP_DIR/"anime_hub.db"); db.set_setting("compact_navigation","1"); db.connection.close()
     w=app.Window();w.resize(1100 if len(sys.argv)>2 else 1440,900);w.show()
-    for name,show in [('Home',w.show_home),('Statistics',w.show_statistics),('All-Anime',lambda:w.show_library(view_mode='Individual Titles')),('Planning',lambda:w.show_status_list('Planning'))]:
+    for name,show in [('Home',w.show_home),('Statistics',w.show_statistics),('Rated-detail',lambda:w.show_detail(1)),('All-Anime',lambda:w.show_library(view_mode='Individual Titles')),('Planning',lambda:w.show_status_list('Planning'))]:
         show();QTest.qWait(220);q.processEvents()
         page=w.stack.currentWidget()
         cards=page.findChildren(app.Card)
         if cards:
             QTest.mouseClick(cards[0],Qt.LeftButton);q.processEvents()
         assert w.grab().save(str(output/(name+'.png'))),name
+        if name=='Statistics':
+            from PySide6.QtWidgets import QScrollArea
+            bar=page.findChild(QScrollArea).verticalScrollBar();bar.setValue(bar.maximum());q.processEvents()
+            assert w.grab().save(str(output/'Personal-ratings.png'))
     w.close();q.processEvents()

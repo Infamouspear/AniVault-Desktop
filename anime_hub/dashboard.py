@@ -80,3 +80,91 @@ def measures(data, compact=False):
         notes=QLabel("Counts include local public library entries once each, without franchise totals. Completion uses assigned status. Episode counts include indexed, present episode files. Storage reflects present indexed files. Rescan Anime and Manga to fill missing sizes. Weekly and monthly activity require a local timestamped event history; current progress cannot reconstruct it.")
         notes.setWordWrap(True);notes.setObjectName("muted");layout.addWidget(notes)
     return outer
+
+def rating_summary(entities):
+    rated=sorted(((e.local.get('personal_rating_units'),e) for e in entities
+                  if e.local.get('personal_rating_units') is not None),
+                 key=lambda pair:(pair[0],pair[1].title.casefold(),pair[1].key))
+    by_genre={}
+    for score,e in rated:
+        for genre in {g for g in (e.item.get('genres') or []) if isinstance(g,str)}:
+            by_genre.setdefault(genre,[]).append(score)
+    return rated,Counter(score for score,_ in rated),by_genre
+
+
+def analytics(window,data,anime,manga):
+    from PySide6.QtWidgets import QPushButton
+    from .polish_ui import CompactFilterLayout
+    from .hub_ui import HomeTile
+    host=QWidget();layout=QVBoxLayout(host);layout.setContentsMargins(0,0,0,0);layout.setSpacing(14)
+    counts=data['statuses'];total=sum(counts.values())
+    summary=data['summary']+(('Indexed episodes',data['indexed']),('Watched episodes',data['watched']),('Storage',data['storage']))
+    for chunk in (summary[:4],summary[4:]):
+        layout.addWidget(stats_strip(chunk))
+    def panel(title):
+        frame=QFrame();frame.setObjectName('overviewStats');body=QVBoxLayout(frame);body.setContentsMargins(14,12,14,12)
+        heading=QLabel(title);heading.setObjectName('section');body.addWidget(heading)
+        return frame,body
+    def line(body,text):
+        label=QLabel(text);label.setWordWrap(True);body.addWidget(label)
+    def chart(body, rows, denominator, clickable=False):
+        for label,count in rows:
+            row=QHBoxLayout()
+            if clickable:
+                name=QPushButton(label);name.clicked.connect(lambda _,g=label:window.show_library(genre=g))
+            else:name=QLabel(label)
+            row.addWidget(name,2)
+            bar=QProgressBar();bar.setFixedWidth(84);bar.setTextVisible(False)
+            bar.setRange(0,max(1,denominator));bar.setValue(count);row.addWidget(bar)
+            value=f'{count} · {count/max(1,denominator):.0%}'
+            bar.setToolTip(f'{label}: {value}');bar.setAccessibleName(f'{label}: {value}')
+            row.addWidget(QLabel(value));body.addLayout(row)
+    pair=QHBoxLayout();layout.addLayout(pair)
+    frame,body=panel('Library completion');pair.addWidget(frame,1)
+    body.addWidget(CompletionRing(data['watched'],data['indexed']),0,Qt.AlignHCenter)
+    line(body,f"{counts['Completed']} completed titles · {counts['Watching']} watching or reading")
+    line(body,f"{data['watched']} watched · {data['indexed']-data['watched']} unwatched indexed episodes")
+    frame,body=panel('Watch & reading status');pair.addWidget(frame,1);chart(body,counts.items(),total)
+    pair=QHBoxLayout();layout.addLayout(pair)
+    frame,body=panel('Library genres');pair.addWidget(frame,1)
+    anime_genres=Counter(g for e in anime for g in {v for v in (e.item.get('genres') or []) if isinstance(v,str)})
+    line(body,'Anime titles can count toward multiple genres.')
+    genres=anime_genres.most_common()
+    chart(body,genres[:6],len(anime),True)
+    if not genres:line(body,'No anime genre metadata yet.')
+    if len(genres)>6:
+        extra=QWidget();inner=QVBoxLayout(extra);chart(inner,genres[6:],len(anime),True);body.addWidget(extra);extra.hide()
+        more=QPushButton('Show all genres');more.setCheckable(True);more.toggled.connect(extra.setVisible);body.addWidget(more)
+    frame,body=panel('Library composition');pair.addWidget(frame,1)
+    formats=Counter()
+    for e in anime:
+        fmt=str(e.item.get('format') or '').upper()
+        formats['TV anime' if fmt in {'TV','TV_SHORT'} else 'Movie' if fmt=='MOVIE' or e.local.get('category')=='Movies' else 'OVA / Special' if fmt in {'OVA','SPECIAL'} else 'Other anime']+=1
+    formats['Manga']=len(manga);chart(body,formats.items(),total)
+    anime_size,manga_size=data['storage_split'];line(body,f'Indexed storage · Anime: {anime_size} · Manga: {manga_size}')
+    frame,body=panel('Personal ratings');layout.addWidget(frame)
+    rated,histogram,genre_ratings=rating_summary([*anime,*manga])
+    line(body,f'{len(rated)} rated · {total-len(rated)} unrated · {len(rated)/max(1,total):.0%} coverage')
+    unrated=QPushButton('Browse unrated anime');unrated.clicked.connect(lambda:window.show_library(state_filter='Unrated'));body.addWidget(unrated,0,Qt.AlignLeft)
+    if not rated:line(body,'Rate a title from In Focus or its detail page to see your ratings here.')
+    else:
+        line(body,f'Average {sum(n for n,_ in rated)/len(rated)/2:.2f} · Highest {rated[-1][0]/2:.1f} · Lowest {rated[0][0]/2:.1f}')
+        buckets=QHBoxLayout();peak=max(histogram.values())
+        for score in range(2,21):
+            stack=QVBoxLayout();bar=QProgressBar();bar.setOrientation(Qt.Vertical);bar.setFixedHeight(56)
+            bar.setTextVisible(False);bar.setRange(0,peak);bar.setValue(histogram[score])
+            label=f'{score/2:g}';bar.setToolTip(f'{label}: {histogram[score]} titles');bar.setAccessibleName(bar.toolTip())
+            stack.addWidget(bar,0,Qt.AlignHCenter);stack.addWidget(QLabel(label),0,Qt.AlignHCenter);buckets.addLayout(stack)
+        body.addLayout(buckets)
+        for heading,entries in [('Highest rated',sorted(rated,key=lambda p:(-p[0],p[1].title.casefold(),p[1].key))[:3]),('Lowest rated',rated[:3])]:
+            line(body,heading);strip=CompactFilterLayout(168)
+            for score,e in entries:
+                item=QWidget();column=QVBoxLayout(item);column.setContentsMargins(0,0,0,0)
+                card=HomeTile(window,e);column.addWidget(card);column.addWidget(QLabel(f'{score/2:.1f} / 10'))
+                strip.addWidget(item)
+            body.addLayout(strip)
+        line(body,'Ratings by genre · average and sample size')
+        for genre,values in sorted(genre_ratings.items(),key=lambda p:(-len(p[1]),p[0])):
+            line(body,f'{genre} · {sum(values)/len(values)/2:.2f} · {len(values)} rated')
+    line(layout,'Historical activity is unavailable. AniVault does not record a separate viewing event history.')
+    return host

@@ -294,7 +294,7 @@ class MangaLibraryMixin:
             play=QPushButton('Continue Reading' if item['current_page'] else 'Read');play.setObjectName('primary');play.clicked.connect(lambda:self.open_manga_item(item['id']));actions.addWidget(play)
         for label,action in [('♥ Favorite' if row['favorite'] else '♡ Favorite',lambda:self._manga_favorite(sid)),('Open Folder',lambda:self.open_folder(row['root_path']))]:
             button=QPushButton(label);button.clicked.connect(action);actions.addWidget(button)
-        actions.addWidget(self._detail_collections_button(scope,manga_id=sid));info.addLayout(actions);info.addWidget(self._direct_status_controls(scope,manga_id=sid));match=QPushButton('Change AniList Match' if row['anilist_id'] else 'Find AniList Manga Match');match.clicked.connect(lambda:self.match_manga(sid));info.addWidget(match,0,Qt.AlignLeft)
+        actions.addWidget(self._detail_collections_button(scope,manga_id=sid));info.addLayout(actions);from .ratings import rating_control;info.addWidget(rating_control(self,scope,"MANGA",sid));info.addWidget(self._direct_status_controls(scope,manga_id=sid));match=QPushButton('Change AniList Match' if row['anilist_id'] else 'Find AniList Manga Match');match.clicked.connect(lambda:self.match_manga(sid));info.addWidget(match,0,Qt.AlignLeft)
         if row['anilist_id']:info.addWidget(QLabel(f"AniList Manga ID: {row['anilist_id']} · metadata only; progress sync deferred"))
         top.addLayout(info,1);layout.addWidget(hero)
         heading=QLabel('Local Volumes / Chapters');heading.setObjectName('section');layout.addWidget(heading)

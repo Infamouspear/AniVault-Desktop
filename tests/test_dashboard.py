@@ -38,3 +38,39 @@ def test_storage_sizes_are_indexed_and_unknown_is_not_zero(tmp_path):
         assert storage_text([(2,2,8)]) == '8 B'
     finally:
         db.connection.close()
+
+def test_personal_ratings_persist_and_remain_independent(tmp_path):
+    import pytest
+    from anime_hub.database import Database
+    from anime_hub.manga_library import MangaStore,scan_manga
+    path=tmp_path/'vault.db'
+    db=Database(path)
+    aid=db.upsert_anime('anime-a','Same title','','Other',str(tmp_path))
+    root=tmp_path/'manga';root.mkdir();(root/'Title.cbz').write_bytes(b'fixture')
+    store=MangaStore(db);store.add_root(root);store.reconcile(scan_manga(store.roots()))
+    mid=store.series_list('normal')[0]['id']
+    for invalid in (0,10.5,3.2,float('nan'),True):
+        with pytest.raises(ValueError):
+            db.set_personal_rating('ANIME',aid,invalid)
+    db.set_personal_rating('ANIME',aid,8.5);db.set_personal_rating('MANGA',mid,4.5)
+    db.upsert_anime('anime-a','Renamed','','Other',str(tmp_path));store.reconcile(scan_manga(store.roots()))
+    db.connection.close()
+    db=Database(path)
+    try:
+        assert db.anime(aid)['title']=='Renamed'
+        assert db.personal_rating('ANIME',aid)==17
+        assert db.personal_rating('MANGA',mid)==9
+        db.set_personal_rating('ANIME',aid,10)
+        assert db.personal_rating('ANIME',aid)==20
+        db.set_personal_rating('ANIME',aid,None)
+        assert db.personal_rating('ANIME',aid) is None
+    finally:db.connection.close()
+
+
+def test_rating_histogram_and_overlapping_genres():
+    from anime_hub.dashboard import rating_summary
+    entries=[SimpleNamespace(local={'personal_rating_units':score},title=str(i),key=str(i),
+                             item={'genres':['Drama','Drama','Action']}) for i,score in enumerate((None,2,19,19))]
+    rated,histogram,genres=rating_summary(entries)
+    assert len(rated)==3 and histogram=={2:1,19:2}
+    assert genres['Drama']==genres['Action']==[2,19,19]

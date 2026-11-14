@@ -128,6 +128,9 @@ class Database:
                 self.connection.execute(f"ALTER TABLE media ADD COLUMN {name} {declaration}")
         if 'size_bytes' not in {row[1] for row in self.connection.execute("PRAGMA table_info(manga_items)")}:
             self.connection.execute("ALTER TABLE manga_items ADD COLUMN size_bytes INTEGER")
+        for table in ('anime','manga_series'):
+            if 'personal_rating_units' not in {r[1] for r in self.connection.execute(f'PRAGMA table_info({table})')}:
+                self.connection.execute(f"ALTER TABLE {table} ADD COLUMN personal_rating_units INTEGER CHECK(typeof(personal_rating_units)='integer' AND personal_rating_units BETWEEN 2 AND 20 OR personal_rating_units IS NULL)")
         saved_columns={row[1] for row in self.connection.execute("PRAGMA table_info(saved_titles)")}
         if "scope" not in saved_columns:
             self.connection.executescript("""ALTER TABLE saved_titles RENAME TO saved_titles_legacy;
@@ -445,6 +448,17 @@ class Database:
         self.connection.execute("DELETE FROM media WHERE present=0")
         self.connection.execute("DELETE FROM anime WHERE NOT EXISTS(SELECT 1 FROM media WHERE media.anime_id=anime.id)")
         self.connection.commit()
+
+    def personal_rating(self, kind, identifier):
+        table={'ANIME':'anime','MANGA':'manga_series'}[kind]
+        row=self.connection.execute(f'SELECT personal_rating_units FROM {table} WHERE id=?',(identifier,)).fetchone()
+        return row[0] if row else None
+
+    def set_personal_rating(self, kind, identifier, value):
+        from .ratings import rating_units
+        table={'ANIME':'anime','MANGA':'manga_series'}[kind]
+        with self.connection:
+            self.connection.execute(f'UPDATE {table} SET personal_rating_units=? WHERE id=?',(rating_units(value),identifier))
 
     def anime_list(self):
         return self.connection.execute("""SELECT a.*, COUNT(m.id) media_count,
