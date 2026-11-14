@@ -137,6 +137,13 @@ class DetailRail(QFrame):
             progress_label=QLabel(summary);progress_label.setObjectName('focusProgress');progress_label.setWordWrap(True);layout.addWidget(progress_label)
             bar=QProgressBar();bar.setRange(0,100);bar.setValue(round(progress));bar.setFixedHeight(6);bar.setTextVisible(False);bar.setStyleSheet('QProgressBar{background:#30394b;border:0} QProgressBar::chunk{background:#ff477c}');layout.addWidget(bar)
             play=QPushButton('▶  Continue Reading' if entity.media_type=='MANGA' else '▶  Continue Watching');play.setObjectName('primary');play.setProperty('focusContinue',True);play.setMinimumHeight(40);play.setEnabled(bool(local.get('available_count')));play.clicked.connect(lambda:self.window._continue_hub_entity(entity));layout.addWidget(play)
+        if not local and entity.scope=='normal' and entity.media_type=='ANIME':
+            from .requests_ui import request_button
+            request=request_button(self.window,item)
+            if request:
+                request.setObjectName('focusRequest')
+                request.setMinimumHeight(36)
+                layout.addWidget(request)
         quick=QHBoxLayout();status_picker=QComboBox();status_picker.setObjectName('hubStatus');status_picker.setMinimumWidth(0);status_picker.setSizePolicy(QSizePolicy.Ignored,QSizePolicy.Fixed);status_picker.setStyleSheet('padding:5px 7px');status_picker.addItems(['No Status','Reading' if entity.media_type=='MANGA' else 'Watching','Completed','Planning','Paused','Dropped']);status_picker.setCurrentIndex(['','Watching','Completed','Planning','Paused','Dropped'].index(entity.status or '') if entity.status in {None,'Watching','Completed','Planning','Paused','Dropped'} else 0)
         def changed(index):
             if not self.window._organization_allowed(entity.scope) or self.window._hub_scope!=entity.scope:return

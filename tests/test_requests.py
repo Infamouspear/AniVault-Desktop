@@ -57,3 +57,25 @@ def test_discover_button_updates_existing_request(monkeypatch,tmp_path):
         assert len(Requests(window.db).all())==1
         card.deleteLater()
     finally:window.close()
+
+
+def test_in_focus_request_stays_in_sync(monkeypatch,tmp_path):
+    from PySide6.QtWidgets import QPushButton
+    from anime_hub import app
+    monkeypatch.setattr(app,'APP_DIR',tmp_path)
+    window=app.Window()
+    try:
+        window.show_home()
+        item={'id':456,'type':'ANIME','isAdult':False,'title':{'english':'Rail demo'}}
+        window._select_hub_entity('normal','anilist:456',item)
+        button=window.context_rail.findChild(QPushButton,'focusRequest')
+        assert button and button.text()=='Request Anime'
+        button.click()
+        store=Requests(window.db)
+        row,=store.all()
+        assert row['provider_id']==456 and button.text()=='Requested'
+        store.update(row['id'],'Approved','')
+        window.requests_changed.emit()
+        assert button.text()=='Approved'
+        assert not window.db.manual_status('normal',anilist_id=456)
+    finally:window.close()
