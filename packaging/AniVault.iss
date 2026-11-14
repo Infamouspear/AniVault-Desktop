@@ -1,10 +1,10 @@
-#define AppVersion "1.2.0"
+#define AppVersion "1.2.1"
 [Setup]
 AppId={{07D7C4E3-91BF-448A-AB6F-8439F86DA015}
 AppName=AniVault
 AppVersion={#AppVersion}
-VersionInfoVersion=1.2.0.2
-VersionInfoProductVersion=1.2.0.2
+VersionInfoVersion=1.2.1.0
+VersionInfoProductVersion=1.2.1.0
 VersionInfoProductTextVersion={#AppVersion}
 AppPublisher=AniVault
 AppComments=Your anime, your library.
@@ -16,7 +16,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 SetupIconFile=..\assets\anivault.ico
 UninstallDisplayIcon={app}\AniVault.exe
 OutputDir=..\dist\installer
-OutputBaseFilename=AniVault-1.2.0-Setup
+OutputBaseFilename=AniVault-1.2.1-Setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern

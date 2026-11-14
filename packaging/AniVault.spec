@@ -1,12 +1,16 @@
 # Windows-only, clean staged application input. Never points at user AppData.
 from pathlib import Path
 import sys
+import ssl
 from PyInstaller.utils.hooks import copy_metadata, get_package_paths
 if sys.platform != 'win32': raise RuntimeError('Build Windows binaries on Windows x64.')
 root=Path(SPECPATH).parent
 stage=root/'build'/'clean-source'
 if not (stage/'release-manifest.json').exists(): raise RuntimeError('Run packaging/build_windows.ps1 first.')
 data=[(str(stage/'assets'),'assets'),(str(stage/'release-manifest.json'),'.')]
+# Preserve the build runtime's certificate distrust policy when present.
+policy = Path(ssl.__file__).with_name('codex-rejected-cas.pem')
+if policy.is_file():data.append((str(policy),'.'))
 for package in ('PySide6','PySide6_Essentials','PySide6_Addons','shiboken6','python-vlc','pypdfium2','Pillow','rarfile','imageio-ffmpeg'):
     data += copy_metadata(package)
 license=Path(sys.base_prefix)/'LICENSE.txt'

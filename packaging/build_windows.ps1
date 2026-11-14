@@ -24,6 +24,8 @@ try {
     & $python -m PyInstaller --noconfirm --clean packaging\AniVault.spec
     Check-Exit
 } finally { $env:PATH = $buildSearchPath }
+$tls = Start-Process -FilePath (Join-Path $PWD "dist\AniVault\AniVault.exe") -ArgumentList "--check-tls" -WindowStyle Hidden -Wait -PassThru
+if ($tls.ExitCode -ne 0) { throw "Packaged HTTPS initialization failed." }
 & $python packaging\audit_bundle.py dist\AniVault
 Check-Exit
 $iscc = (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source
@@ -31,5 +33,5 @@ if (-not $iscc) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
 if (-not (Test-Path $iscc)) { throw 'Install Inno Setup 6 and rerun to compile the installer.' }
 & $iscc packaging\AniVault.iss
 Check-Exit
-Get-FileHash dist\installer\AniVault-1.2.0-Setup.exe -Algorithm SHA256
+Get-FileHash dist\installer\AniVault-1.2.1-Setup.exe -Algorithm SHA256
 Write-Host 'Built RC. Run WINDOWS_ACCEPTANCE.md before declaring V1.1 complete.'
