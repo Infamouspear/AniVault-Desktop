@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ASSETS = ('anivault.ico','anivault_icon.png','caught_up_vee.png','empty_vee.png',
           'no_results_vee.png','restricted_banner.png','restricted_vee.png','splash.png','vee.png','release-public.json')
 ICONS = ('house','tv','book-open','circle-play','plus','heart','compass','calendar',
-         'bookmark','layers','tags','download','settings','lock','refresh-cw','chevron-left','chevron-right','search','chevron-down')
+         'bookmark','layers','tags','download','settings','lock','refresh-cw','chevron-left','chevron-right','search','chevron-down','chart-column')
 
 def stage(destination, client_id=None, *, offline_candidate=False):
     destination = Path(destination).resolve()

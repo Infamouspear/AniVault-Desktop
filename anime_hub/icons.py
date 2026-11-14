@@ -8,7 +8,7 @@ ICON_DIR = Path(__file__).resolve().parent.parent / 'assets' / 'icons'
 NAV_ICONS = {'home':'house','all':'tv','manga':'book-open','watching':'circle-play',
  'recent':'plus','favorites':'heart','discover':'compass','airing':'calendar',
  'planning':'bookmark','collections':'layers','status_hub':'tags','downloads':'download',
- 'settings':'settings','restricted':'lock'}
+ 'statistics':'chart-column','settings':'settings','restricted':'lock'}
 _CACHE = {}
 
 def outline_icon(name, active=False, ratio=1.0):

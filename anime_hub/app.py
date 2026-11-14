@@ -901,6 +901,7 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
             label=QLabel(text); label.setObjectName("eyebrow"); layout.addWidget(label);labels.append(label)
         section("PRIMARY"); nav("home","⌂   Home",self.show_home)
         nav("all","▦   Anime",self.show_library);nav("manga","▤   Manga",lambda:self.show_manga_library());nav("watching","▶   Continue Watching",lambda:self.show_library(state_filter="In Progress"));nav("recent","＋   Recently Added",lambda:self.show_library(sort_mode="Recently Added"));nav("favorites","♡   Favorites",self.show_favorites)
+        nav("statistics","Statistics",self.show_statistics)
         section("DISCOVER");nav("discover","✦   Discover",self.show_discover);nav("airing","◫   Airing / Upcoming",self.show_airing)
         section("ORGANIZE");nav("planning","◇   Planning",lambda:self.show_status_list("Planning","normal"));nav("collections","▤   Collections",lambda:self.show_collections("normal"));nav("status_hub","◉   Status Hub",self.show_status_hub)
         section("SYSTEM");nav("requests","Requests && Feedback",self.show_requests);nav("downloads","↓   Downloads",self.show_downloads);nav("settings","⚙   Settings",self.show_settings)
@@ -1035,7 +1036,7 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
 
     def _dispatch_route(self,route):
         kind=route[0]
-        actions={"requests":self.show_requests,"status_hub":self.show_status_hub,"home":self.show_home,"settings":self.show_settings,"airing":self.show_airing,"downloads":self.show_downloads,
+        actions={"statistics":self.show_statistics,"requests":self.show_requests,"status_hub":self.show_status_hub,"home":self.show_home,"settings":self.show_settings,"airing":self.show_airing,"downloads":self.show_downloads,
                  "collections":self.show_collections,"franchises":self.show_franchises,"discover":self.show_discover,"saved":self.show_saved}
         if kind=='library_franchise':self.show_library_franchise(route[1],route[2])
         elif kind=="global_search":self.show_global_search(route[1],route[2])

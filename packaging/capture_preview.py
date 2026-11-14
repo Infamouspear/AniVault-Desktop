@@ -30,11 +30,18 @@ with tempfile.TemporaryDirectory(prefix='anivault-preview-') as temp:
         paint.end();path=Path(temp)/f'art-{i}.jpg';image.save(str(path))
         aid=db.upsert_anime('preview-'+str(i),title,'','Watching',temp)
         db.set_metadata(aid,1000+i,{'title':{'english':title},'cover_path':str(path),'genres':['Adventure','Drama'],'description':'A synthetic library entry for testing the new artwork layout.'})
+        if i<4:
+            from types import SimpleNamespace
+            for episode in range(1,5):
+                video=Path(temp)/f'{i}-{episode}.mp4'
+                video.touch()
+                db.upsert_media(aid,SimpleNamespace(path=video,kind='episode',season=1,episode=episode))
+            db.set_watched(db.media(aid)[0]['id'],True)
         if i>=4:db.set_manual_status('Planning','normal',anime_id=aid)
     db.connection.commit();db.connection.close()
     if len(sys.argv)>2: db=app.Database(app.APP_DIR/"anime_hub.db"); db.set_setting("compact_navigation","1"); db.connection.close()
     w=app.Window();w.resize(1100 if len(sys.argv)>2 else 1440,900);w.show()
-    for name,show in [('Home',w.show_home),('All-Anime',lambda:w.show_library(view_mode='Individual Titles')),('Planning',lambda:w.show_status_list('Planning'))]:
+    for name,show in [('Home',w.show_home),('Statistics',w.show_statistics),('All-Anime',lambda:w.show_library(view_mode='Individual Titles')),('Planning',lambda:w.show_status_list('Planning'))]:
         show();QTest.qWait(220);q.processEvents()
         page=w.stack.currentWidget()
         cards=page.findChildren(app.Card)

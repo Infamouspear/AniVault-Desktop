@@ -192,34 +192,40 @@ class DetailRail(QFrame):
 
 class HomeTile(QFrame):
     def __init__(self,window,entity,continue_mode=False):
-        super().__init__();self.setObjectName('card');self.setProperty('posterCard',True);self.setFixedSize(158,282);self.setFocusPolicy(Qt.StrongFocus);self.setCursor(Qt.PointingHandCursor);self.entity=entity;self.item=entity.item
+        super().__init__();self.setObjectName('card');self.setProperty('posterCard',True);self.setFixedSize(194 if continue_mode else 132,205 if continue_mode else 140);self.setFocusPolicy(Qt.StrongFocus);self.setCursor(Qt.PointingHandCursor);self.entity=entity;self.item=entity.item
         layout=QVBoxLayout(self);layout.setContentsMargins(8,8,8,8);layout.setSpacing(5)
-        self.art=QLabel('NO ART');self.art.setFixedSize(144,172);self.art.setAlignment(Qt.AlignCenter);self.art.setStyleSheet('background:#202638;border-radius:7px;color:#7e879b');self.art.setAttribute(Qt.WA_TransparentForMouseEvents);layout.addWidget(self.art)
+        self.art=QLabel('NO ART');self.art.setFixedSize(178 if continue_mode else 116,104 if continue_mode else 96);self.art.setAlignment(Qt.AlignCenter);self.art.setStyleSheet('background:#202638;border-radius:7px;color:#7e879b');self.art.setAttribute(Qt.WA_TransparentForMouseEvents);layout.addWidget(self.art)
         title=QLabel(entity.title);title.setFixedHeight(20);title.setToolTip(entity.title);title.setAttribute(Qt.WA_TransparentForMouseEvents);layout.addWidget(title);self.title=title
         local=entity.local
         summary=(local.get('active_label') or local.get('last_read_label') or 'Ready to read') if entity.media_type=='MANGA' and local else f"{local.get('watched_count') or 0} / {local.get('episode_count') or 0} watched" if local else entity.item.get('_recommendation_reason') or entity.label
         self.status_label=QLabel(summary);self.status_label.setObjectName('muted');self.status_label.setFixedHeight(18);self.status_label.setToolTip(summary);self.status_label.setAttribute(Qt.WA_TransparentForMouseEvents);layout.addWidget(self.status_label)
+        self.status_label.setVisible(continue_mode)
+        if continue_mode and local:
+            bar=QProgressBar();bar.setTextVisible(False);bar.setFixedHeight(4)
+            bar.setRange(0,100 if entity.media_type=='MANGA' else max(1,local.get('episode_count') or 0))
+            bar.setValue(int(local.get('progress') or 0) if entity.media_type=='MANGA' else int(local.get('watched_count') or 0))
+            bar.setAttribute(Qt.WA_TransparentForMouseEvents);layout.addWidget(bar)
         if continue_mode:
             action=QPushButton('Continue Reading' if entity.media_type=='MANGA' else '▶ Continue');action.setFixedHeight(28);action.setStyleSheet('padding:2px 7px;font-size:12px');action.clicked.connect(lambda:window._continue_hub_entity(entity));layout.addWidget(action)
         paths=window._entity_cover_paths([entity])
         if paths:
             from .app import _scaled_artwork
-            self.art.setPixmap(_scaled_artwork(paths[0],144,172))
-        elif (entity.item.get('coverImage') or {}).get('large'):window._load_remote_artwork(entity.item['coverImage']['large'],self.art,144,172)
+            self.art.setPixmap(_scaled_artwork(paths[0],self.art.width(),self.art.height()))
+        elif (entity.item.get('coverImage') or {}).get('large'):window._load_remote_artwork(entity.item['coverImage']['large'],self.art,self.art.width(),self.art.height())
         elif local and entity.media_type=='MANGA':window._load_manga_cover(local,self.art)
         window._register_status_card(self,entity.scope,entity.key)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(lambda pos:window.manga_menu(self,pos,local['id']) if local and entity.media_type=='MANGA' else window.anime_collection_menu(self,pos,local['id'],scope=entity.scope) if local else window.remote_anime_menu(self,pos,entity.item,entity.scope))
         self.window=window
     def resizeEvent(self,event):
-        super().resizeEvent(event);self.title.setText(QFontMetrics(self.title.font()).elidedText(self.entity.title,Qt.ElideRight,140))
+        super().resizeEvent(event);self.title.setText(QFontMetrics(self.title.font()).elidedText(self.entity.title,Qt.ElideRight,self.art.width()))
     def mouseReleaseEvent(self,event):
         if event.button()==Qt.LeftButton:self.window._open_hub_entity(self.entity)
     def keyPressEvent(self,event):
         if event.key() in (Qt.Key_Return,Qt.Key_Enter):self.window._open_hub_entity(self.entity)
         else:super().keyPressEvent(event)
     def set_manual_status(self,status):self.entity.status=status;self.status_label.setText(status or self.entity.label)
-    def set_favorite(self,value):self.entity.local['favorite']=int(value);self.title.setText(QFontMetrics(self.title.font()).elidedText(('♥  ' if value else '')+self.entity.title,Qt.ElideRight,140))
+    def set_favorite(self,value):self.entity.local['favorite']=int(value);self.title.setText(QFontMetrics(self.title.font()).elidedText(('♥  ' if value else '')+self.entity.title,Qt.ElideRight,self.art.width()))
 
 
 class HubMixin:
@@ -332,50 +338,87 @@ class HubMixin:
         url=metadata.get('bannerImage') or (metadata.get('coverImage') or {}).get('large')
         if not path and url:self._load_remote_artwork(url,frame.banner,1000,400)
         return frame
-    def _home_shelf(self,outer,title,entities,continue_mode=False):
+    def _home_shelf(self,outer,title,entities,continue_mode=False,shortcut=None):
         if not entities:
             if title not in {'Continue Watching','Continue Reading'}:return None
-            label=QLabel(title);label.setObjectName('section');outer.addWidget(label);outer.addWidget(self._empty_state('caught_up','All caught up.',copy='Nothing waiting in this queue.'));return None
-        label=QLabel(title);label.setObjectName('section');outer.addWidget(label)
-        strip=QScrollArea();strip.setWidgetResizable(True);strip.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded);strip.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff);strip.setFixedHeight(302);strip.setFrameShape(QFrame.NoFrame)
+            label=QLabel(title);label.setObjectName('section');outer.addWidget(label)
+            button=QPushButton('All caught up · Browse your library');button.clicked.connect(self.show_library);outer.addWidget(button,0,Qt.AlignLeft);return None
+        header=QHBoxLayout();label=QLabel(title);label.setObjectName('section');header.addWidget(label);header.addStretch()
+        if shortcut:
+            button=QPushButton('View all');button.clicked.connect(shortcut);header.addWidget(button)
+        outer.addLayout(header)
+        strip=QScrollArea();strip.setWidgetResizable(True);strip.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded);strip.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff);strip.setFixedHeight(223 if continue_mode else 158);strip.setFrameShape(QFrame.NoFrame)
         body=QWidget();layout=QHBoxLayout(body);layout.setContentsMargins(0,0,0,0);layout.setSpacing(12);layout.setAlignment(Qt.AlignLeft)
         for entity in entities[:12]:layout.addWidget(HomeTile(self,entity,continue_mode))
         strip.setWidget(body);outer.addWidget(strip);return strip
+    def _dashboard_data(self):
+        from .dashboard import summarize
+        stamp=self.db.change_stamp()
+        cached=getattr(self,'_dashboard_cache',None)
+        if cached and cached[0]==stamp:return cached[1:]
+        store=self.organization('normal')
+        local=[e for e in store.entities.values() if e.local]
+        anime={e.local['id']:e for e in local if e.media_type=='ANIME'}
+        manga=[e for e in local if e.media_type=='MANGA']
+        rows=self.db.connection.execute("""
+            SELECT anime_id,count(*),sum(CASE WHEN watched=1 THEN 1 ELSE 0 END),
+                   max(CASE WHEN watched=0 AND resume_position_ms>0 THEN 1 ELSE 0 END)
+            FROM media WHERE present=1 AND kind='episode' GROUP BY anime_id
+        """).fetchall()
+        episodes={r[0]:r for r in rows if r[0] in anime}
+        data=summarize(list(anime.values()),manga,episodes.values())
+        self._dashboard_cache=(stamp,anime,manga,episodes,data)
+        return anime,manga,episodes,data
+
+    def show_statistics(self):
+        from .dashboard import measures
+        from .desktop_ui import stats_strip
+        self.current_view='statistics';self.current_anime_id=None;self._set_active_nav('statistics')
+        page=QWidget();page.setProperty('transientPage',True);shell=QVBoxLayout(page)
+        scroll=QScrollArea();scroll.setWidgetResizable(True);shell.addWidget(scroll)
+        body=QWidget();layout=QVBoxLayout(body);layout.setContentsMargins(22,18,22,18)
+        title=QLabel('Statistics');title.setObjectName('title');layout.addWidget(title)
+        data=self._dashboard_data()[3]
+        layout.addWidget(stats_strip(data['summary']+(('Storage','Unavailable'),)))
+        layout.addWidget(measures(data));layout.addStretch();scroll.setWidget(body);self.replace(page)
+
     def show_home(self):
+        from .desktop_ui import stats_strip
+        from .dashboard import measures
+        from .polish_ui import CompactFilterLayout
+        from .icons import outline_icon
         self.current_view='home';self.current_anime_id=None;self._set_active_nav('home')
-        page=QWidget();page.setProperty('transientPage',True);outer=QVBoxLayout(page);outer.setContentsMargins(20,16,20,14)
-        scroll=QScrollArea();scroll.setWidgetResizable(True);scroll.setFrameShape(QFrame.NoFrame);body=QWidget();content=QVBoxLayout(body);content.setContentsMargins(0,0,0,8);content.setSpacing(14)
-        store=self.organization('normal');local=[e for e in store.entities.values() if e.local];anime={e.local['id']:e for e in local if e.media_type=='ANIME'};manga=[e for e in local if e.media_type=='MANGA']
-        continuing=[anime[r['id']] for r in self.db.continue_watching() if r['id'] in anime];recent=[anime[r['id']] for r in self.db.recently_watched() if r['id'] in anime]
-        featured=next(iter(continuing or recent or [e for e in local if e.local.get('favorite')] or local),None)
-        if featured:content.addWidget(self._entity_hero(featured))
-        else:
-            from .app import ASSET_DIR
-            hero=ArtworkHero(ASSET_DIR/'vee.png');hero.branding_scope='normal';hero.setProperty('brandIllustration',True);hero.setMinimumHeight(250);layout=QVBoxLayout(hero);layout.setContentsMargins(30,24,30,24);title=QLabel('Every story has a home.');title.setObjectName('heroTitle');layout.addWidget(title);layout.addWidget(QLabel('Add your local library, or discover your next anime and manga.'));button=QPushButton('Explore Discover');button.clicked.connect(self.show_discover);layout.addWidget(button,0,Qt.AlignLeft);content.addWidget(hero)
-        from .desktop_ui import overview_stats,stats_strip
-        content.addWidget(stats_strip(overview_stats(list(anime.values()),manga)))
+        page=QWidget();page.setProperty('transientPage',True);outer=QVBoxLayout(page);outer.setContentsMargins(16,12,16,12)
+        scroll=QScrollArea();scroll.setWidgetResizable(True);body=QWidget();content=QVBoxLayout(body);content.setContentsMargins(0,0,0,8);content.setSpacing(12)
+        anime,manga,episodes,data=self._dashboard_data()
+        continuing=[anime[i] for i,(_,count,watched,resume) in episodes.items() if resume or 0<watched<count]
+        continuing.sort(key=lambda e:e.local.get('last_watched_at') or '',reverse=True)
+        added=sorted(anime.values(),key=lambda e:(e.local.get('added_at') or '',e.local['id']),reverse=True)
+        featured=next(iter(continuing or added or manga),None)
+        paths=self._entity_cover_paths([featured]) if featured else []
+        hero=ArtworkHero((featured.item.get('banner_path') or (paths[0] if paths else None)) if featured else None)
+        hero.library_overview=True;hero.setMinimumHeight(190)
+        head=QVBoxLayout(hero);head.setContentsMargins(20,16,20,12)
+        eyebrow=QLabel('OVERVIEW');eyebrow.setObjectName('eyebrow');head.addWidget(eyebrow)
+        title=QLabel('Home');title.setObjectName('heroTitle');head.addWidget(title)
+        head.addWidget(QLabel('Your anime & manga library at a glance.'));head.addStretch()
+        head.addWidget(stats_strip(data['summary']+(('Storage','Unavailable'),)));content.addWidget(hero)
+        actions=CompactFilterLayout(36)
+        for label,icon,callback in (
+            ('Continue Watching','circle-play',lambda:self.show_library(state_filter='In Progress')),
+            ('Rescan Library','refresh-cw',self.rescan),('Open Anime','tv',self.show_library),
+            ('Open Manga','book-open',self.show_manga_library),('View Statistics','chart-column',self.show_statistics)):
+            button=QPushButton(label);button.setIcon(outline_icon(icon));button.clicked.connect(lambda _,fn=callback:fn())
+            if label=='Continue Watching':button.setObjectName('primary')
+            actions.addWidget(button)
+        content.addLayout(actions)
         self._home_shelf(content,'Continue Watching',continuing,True)
-        added=sorted([e for e in local if e.media_type=='ANIME'],key=lambda e:(e.local.get('added_at') or e.local.get('created_at') or '',e.local['id']),reverse=True);self._home_shelf(content,'Recently Added',added)
-        if recent:self._home_shelf(content,'Recently Watched',recent)
-        manga.sort(key=lambda e:(e.local.get('last_read') or '',e.local['id']),reverse=True);self._home_shelf(content,'Continue Reading' if any(e.local.get('last_read') for e in manga) else 'Your Manga',manga,True)
-        picks_host=QWidget();picks_layout=QVBoxLayout(picks_host);picks_layout.setContentsMargins(0,0,0,0);content.addWidget(picks_host);content.addStretch();scroll.setWidget(body);outer.addWidget(scroll);self.replace(page)
+        self._home_shelf(content,'Recently Added',added,shortcut=lambda:self.show_library(sort_mode='Recently Added'))
+        reading=sorted((e for e in manga if e.local.get('active_item_id')),key=lambda e:e.local.get('last_read') or '',reverse=True)
+        if reading:self._home_shelf(content,'Continue Reading',reading,True)
+        content.addWidget(measures(data,True));content.addStretch();scroll.setWidget(body);outer.addWidget(scroll);self.replace(page)
         if featured:self._select_hub_entity('normal',featured.key)
-        if not local:return
-        profile=self._recommendation_profile('normal','ANIME');page_ref=weakref.ref(page)
-        def loaded(result):
-            target=page_ref()
-            if target is None or not isValid(target) or self.stack.currentWidget() is not target or self._hub_scope!='normal':return
-            entities=[]
-            for item in self._rank_recommendations(profile,result.get('items') or []):
-                entity=self.organization('normal').resolve('anilist:'+str(item['id']),item)
-                if entity:entities.append(entity)
-            self._home_shelf(picks_layout,'Top Picks for You',entities)
-        cached=self._section_page_cache.get('discover:ANIME')
-        if cached is not None and isValid(cached) and cached.property('recommendationFingerprint')==profile.fingerprint:
-            from .app import SeasonCard
-            loaded({'items':[card.item for card in cached.findChildren(SeasonCard)]})
-        elif profile.genres or profile.tags:
-            self._request_discover_page({'page':1,'is_adult':False,'media_type':'ANIME',**profile.query()},loaded,lambda _:None)
+
     def show_status_hub(self):
         self.show_collections('normal');self.current_view='status_hub';self._set_active_nav('status_hub')
         page=self.stack.currentWidget();page.setProperty('transientPage',True)
