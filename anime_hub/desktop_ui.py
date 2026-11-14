@@ -54,45 +54,6 @@ def stats_strip(stats):
     return frame
 
 
-def requests_page(window):
-    page = QWidget(); page.setProperty("transientPage", True)
-    layout = QVBoxLayout(page); layout.setContentsMargins(24, 22, 24, 22)
-    heading = QLabel("Requests & Feedback"); heading.setObjectName("title")
-    layout.addWidget(heading)
-    note = QLabel("Local preview · Try the request tracker here. Entries stay on this desktop for this session; LAN submissions are not connected yet.")
-    note.setWordWrap(True); note.setObjectName("muted"); layout.addWidget(note)
-    rows = getattr(window, "_request_preview", [])
-    window._request_preview = rows
-    form = QHBoxLayout()
-    kind = QComboBox(); kind.addItems(["Show request", "Feature request", "Bug report"])
-    title = QLineEdit(); title.setMaxLength(160); title.setPlaceholderText("Title or short summary")
-    add = QPushButton("Add request"); add.setObjectName("primary")
-    form.addWidget(kind); form.addWidget(title, 1); form.addWidget(add); layout.addLayout(form)
-    listing = QListWidget(); layout.addWidget(listing, 1)
-    status = QComboBox(); status.addItems(["New", "Planned", "In progress", "Done"])
-    layout.addWidget(QLabel("Selected request status")); layout.addWidget(status, 0, Qt.AlignLeft)
-    def text(row):
-        return "  ·  ".join(row)
-    for row in rows:
-        listing.addItem(text(row))
-    def submit():
-        value = title.text().strip()
-        if value:
-            row = [kind.currentText(), value, "New"]
-            rows.append(row); listing.addItem(text(row)); listing.setCurrentRow(len(rows)-1); title.clear()
-    def select(index):
-        status.setEnabled(index >= 0)
-        if index >= 0:
-            status.blockSignals(True); status.setCurrentText(rows[index][2]); status.blockSignals(False)
-    def change(value):
-        index = listing.currentRow()
-        if index >= 0:
-            rows[index][2] = value; listing.item(index).setText(text(rows[index]))
-    add.clicked.connect(submit); title.returnPressed.connect(submit)
-    listing.currentRowChanged.connect(select); status.currentTextChanged.connect(change); select(-1)
-    return page
-
-
 def decorate_search(field):
     from .icons import outline_icon
     field.addAction(outline_icon("search"), QLineEdit.LeadingPosition)

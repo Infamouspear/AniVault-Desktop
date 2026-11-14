@@ -716,6 +716,7 @@ class StatusCountLabel(QLabel):
 
 class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMixin,OrganizationMixin,MangaLibraryMixin,QMainWindow):
     anilist_progress_updated=Signal(int,int,str)
+    requests_changed=Signal()
     personal_rating_changed=Signal()
     manual_status_changed=Signal(str,str,object)
     def __init__(self):
@@ -942,10 +943,10 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         toggle.clicked.connect(flip)
         return sidebar
 
-    def show_requests(self):
-        from .desktop_ui import requests_page
+    def show_requests(self,provider=None):
+        from .requests_ui import requests_page
         self.current_view="requests";self.current_anime_id=None
-        self._set_active_nav("requests");self.replace(requests_page(self))
+        self._set_active_nav("requests");self.replace(requests_page(self,provider))
 
     def _set_active_nav(self,key):
         key=("planning" if self.current_status_name=="Planning" else "status_hub") if key=="collections" and self.current_view=="status_list" else "status_hub" if key in {"unwatched","completed"} else key
@@ -1577,6 +1578,13 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
             if self.db.anime_scope(local_row)!=scope:local_row=None
         manual=(local_row["manual_status"] or self.db.manual_status(scope,anilist_id=item["id"])) if is_manga and local_row else self.db.manual_status(scope,anime_id=local_row["id"]) if local_row else self.db.manual_status(scope,anilist_id=item["id"])
         card=SeasonCard(item,bool(local_row),self._load_remote_artwork,False,False,manual,compact=scope=="normal");card.saved_scope=scope
+        if scope=='normal' and not is_manga and not local_row and item.get('isAdult') is False:
+            from .requests_ui import request_button
+            button=request_button(self,item)
+            if button:
+                button.setFixedHeight(26);button.setStyleSheet('padding:2px 8px')
+                card.layout().addWidget(button)
+                card.setFixedHeight(max(card.height(),400 if item.get('_recommendation_reason') else 374))
         key=f"manga:{local_row['id']}" if is_manga and local_row else self.db.entity_key_for_anime(local_row["id"]) if local_row else f"anilist:{int(item['id'])}"
         self._register_status_card(card,scope,key);self._register_status_card(card,scope,f"anilist:{int(item['id'])}")
         card.clicked.connect(lambda _:self.show_manga_detail(local_row["id"]) if is_manga and local_row else self.show_detail(local_row["id"]) if local_row else self.show_remote_anilist(item,source))
@@ -2419,6 +2427,10 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         actions=QHBoxLayout()
         if local_row:
             badge=QPushButton('◈  In Vault');badge.setObjectName('primary');badge.clicked.connect(lambda:self.show_manga_detail(local_row['id']) if media_type=='MANGA' else self.show_detail(local_row['id']));actions.addWidget(badge)
+        if scope=='normal' and media_type=='ANIME' and not local_row:
+            from .requests_ui import request_button
+            request=request_button(self,item)
+            if request:actions.addWidget(request)
         actions.addStretch();info.addLayout(actions)
         note=QLabel('AniList • '+media_type.title()+(' • In Vault' if local_row else ' • Metadata only; add local media to '+('read' if media_type=='MANGA' else 'play')));note.setObjectName('muted');note.setWordWrap(True);info.addWidget(note)
         layout.addLayout(info,1);flow.addWidget(hero);flow.addWidget(self._related_panel(item,scope,presentation='discovery'));flow.addStretch();self.replace(page)

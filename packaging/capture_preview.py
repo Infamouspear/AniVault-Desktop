@@ -53,4 +53,15 @@ with tempfile.TemporaryDirectory(prefix='anivault-preview-') as temp:
             from PySide6.QtWidgets import QScrollArea
             bar=page.findChild(QScrollArea).verticalScrollBar();bar.setValue(bar.maximum());q.processEvents()
             assert w.grab().save(str(output/'Personal-ratings.png'))
+    from anime_hub.requests_store import Requests
+    request_item={'id':9910,'type':'ANIME','isAdult':False,'title':{'english':'The Lantern Archive'},'format':'TV','seasonYear':2026}
+    w.show_remote_anilist(request_item,'Discover');q.processEvents()
+    assert w.grab().save(str(output/'Discover-request.png'))
+    store=Requests(w.db);store.discover(request_item);store.add('anime','Festival edition','Specific release')
+    store.add('feedback','Add a compact display mode','Feature suggestion')
+    w.show_requests();q.processEvents()
+    assert w.grab().save(str(output/'Requests.png'))
+    from PySide6.QtWidgets import QTabWidget
+    w.stack.currentWidget().findChild(QTabWidget).setCurrentIndex(1);q.processEvents()
+    assert w.grab().save(str(output/'Feedback.png'))
     w.close();q.processEvents()

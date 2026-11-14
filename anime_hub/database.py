@@ -102,6 +102,8 @@ class Database:
         self.connection.executescript(READER_SCHEMA)
         from .manga_library import SCHEMA as MANGA_SCHEMA
         self.connection.executescript(MANGA_SCHEMA)
+        from .requests_store import SCHEMA as REQUEST_SCHEMA
+        self.connection.executescript(REQUEST_SCHEMA)
         self._migrate()
         self.connection.executescript("CREATE INDEX IF NOT EXISTS manual_status_list ON manual_status(scope,status,updated_at DESC); CREATE INDEX IF NOT EXISTS collection_entries_added ON collection_entries(collection_id,added_at DESC);")
 
