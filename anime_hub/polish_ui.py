@@ -10,8 +10,8 @@ from .organization import display_title
 
 class CompactFilterLayout(QLayout):
     """One compact row when it fits; wraps without forcing a wider window."""
-    def __init__(self):
-        super().__init__();self.items=[];self.setContentsMargins(0,0,0,0);self.setSpacing(6)
+    def __init__(self,height=32):
+        super().__init__();self.items=[];self.row_height=height;self.setContentsMargins(0,0,0,0);self.setSpacing(8)
     def addItem(self,item):self.items.append(item)
     def count(self):return len(self.items)
     def itemAt(self,index):return self.items[index] if 0<=index<len(self.items) else None
@@ -23,14 +23,25 @@ class CompactFilterLayout(QLayout):
     def minimumSize(self):return QSize(160,32)
     def setGeometry(self,rect):super().setGeometry(rect);self.arrange(rect,True)
     def arrange(self,rect,apply):
-        x=rect.x();y=rect.y();height=0
+        rows=[]; row=[]; used=0
         for item in self.items:
             if item.isEmpty():continue
-            size=item.sizeHint();width=min(size.width(),item.widget().maximumWidth(),max(1,rect.width()))
-            if x>rect.x() and x+width>rect.right()+1:x=rect.x();y+=height+self.spacing();height=0
-            if apply:item.setGeometry(QRect(x,y,width,32))
-            x+=width+self.spacing();height=max(height,32)
-        return y-rect.y()+height
+            widget=item.widget()
+            width=min(max(item.sizeHint().width(),widget.minimumWidth()),max(1,rect.width()))
+            if row and used+self.spacing()+width>rect.width():
+                rows.append(row);row=[];used=0
+            used+=width+(self.spacing() if row else 0);row.append((item,width))
+        if row:rows.append(row)
+        if apply:
+            for index,row in enumerate(rows):
+                spare=max(0,rect.width()-sum(width for _,width in row)-self.spacing()*(len(row)-1))
+                x=rect.x()
+                for item,width in row:
+                    if item.widget().property('toolbarStretch'):width+=spare;spare=0
+                    item.setGeometry(QRect(x,rect.y()+index*(self.row_height+self.spacing()),width,self.row_height))
+                    x+=width+self.spacing()
+        return len(rows)*(self.row_height+self.spacing())-self.spacing() if rows else 0
+
 
 
 from .hub_ui import ArtworkHero

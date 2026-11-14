@@ -91,3 +91,9 @@ def requests_page(window):
     add.clicked.connect(submit); title.returnPressed.connect(submit)
     listing.currentRowChanged.connect(select); status.currentTextChanged.connect(change); select(-1)
     return page
+
+
+def decorate_search(field):
+    from .icons import outline_icon
+    field.addAction(outline_icon("search"), QLineEdit.LeadingPosition)
+    field.setProperty("toolbarStretch", True)

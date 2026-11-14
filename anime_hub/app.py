@@ -37,6 +37,7 @@ from .manga_ui import MangaLibraryMixin
 from .organization_ui import OrganizationMixin
 from .related_ui import RelatedMixin
 from .library_franchises import LibraryFranchiseMixin, build_franchises
+from .desktop_ui import decorate_search
 from .polish_ui import PolishMixin, SearchSuggestions, CoverListCard, DetailBackdrop, CompactFilterLayout
 from .hub_ui import HubMixin, ArtworkHero, DetailRail, SelectionHook
 from .downloads import Downloads
@@ -100,7 +101,18 @@ QPushButton#windowButton { background:transparent; border:0; border-radius:0; pa
 QPushButton#windowButton:hover { background:#252f42; }
 QPushButton#closeButton { background:transparent; border:0; border-radius:0; padding:0; font-size:16px; }
 QPushButton#closeButton:hover { background:#c42b4d; color:white; }
-QLineEdit,QComboBox { background:#111925; border:1px solid #2c394c; border-radius:8px; padding:9px; selection-background-color:#ff3f78; }
+QLineEdit,QComboBox { background:#141923; border:1px solid #303a4a; border-radius:16px; padding:7px 12px; selection-background-color:#a83762; }
+QComboBox { padding-right:26px; }
+QComboBox::drop-down { subcontrol-origin:padding; subcontrol-position:top right; width:24px; border:0; background:transparent; }
+QComboBox::down-arrow { image:url(__CHEVRON__); width:12px; height:12px; }
+QLineEdit:focus,QComboBox:focus,QPushButton:focus {border:1px solid #b46c90;}
+QToolTip {background:#171b25;color:#f8eef5;border:1px solid #584354;padding:5px;}
+QScrollBar:vertical {background:#0c1017;width:9px;margin:2px;}
+QScrollBar:horizontal {background:#0c1017;height:9px;margin:2px;}
+QScrollBar::handle {background:#404757;border-radius:3px;min-height:22px;min-width:22px;}
+QScrollBar::handle:hover {background:#766179;}
+QScrollBar::add-line,QScrollBar::sub-line {width:0;height:0;}
+QScrollBar::add-page,QScrollBar::sub-page {background:transparent;}
 QTextEdit { background:#111925; border:1px solid #2c394c; border-radius:8px; padding:9px; selection-background-color:#ff3f78; }
 QListWidget { border:1px solid #263246; border-radius:10px; background:#0e151f; outline:0; }
 QListWidget::item { padding:10px; border-bottom:1px solid #202b3b; }
@@ -136,6 +148,8 @@ QMenu::right-arrow { right:10px; }
 QFrame#vaultDialogPanel { background:#101823; border:1px solid #3b4860; border-radius:14px; }
 QLabel#vaultDialogTitle { font-size:20px; font-weight:700; color:#ffffff; }
 """
+STYLE=STYLE.replace("__CHEVRON__", (ASSET_DIR/"icons"/"chevron-down.svg").as_posix())
+
 RESTRICTED_STYLE=STYLE+"""
 QWidget { background:#0d080d; color:#fff2f6; }
 QLabel { background:transparent; }
@@ -646,7 +660,7 @@ class TitleBar(QFrame):
         for text,action in (("‹",window.navigate_back),("›",window.navigate_forward)):
             navigation=QPushButton(text);navigation.setFixedSize(30,32);navigation.setStyleSheet('padding:0;font-size:20px');navigation.clicked.connect(action);navigation.setToolTip('Back' if text=='‹' else 'Forward');layout.addWidget(navigation)
         layout.addSpacing(12)
-        window.global_search=QLineEdit();window.global_search.setObjectName('globalSearch');window.global_search.setPlaceholderText('Search your vault, anime & manga…   Ctrl+K');window.global_search.setMinimumWidth(180);window.global_search.setMaximumWidth(700);window.global_search.setFixedHeight(36);layout.addWidget(window.global_search,1);layout.addStretch(1)
+        window.global_search=QLineEdit();window.global_search.setObjectName('globalSearch');window.global_search.setPlaceholderText('Search your vault, anime & manga…   Ctrl+K');window.global_search.setMinimumWidth(180);window.global_search.setMaximumWidth(700);window.global_search.setFixedHeight(36);decorate_search(window.global_search);layout.addWidget(window.global_search,1);layout.addStretch(1)
         window.global_suggestions=SearchSuggestions(window,window.global_search,'normal')
         window.global_search.returnPressed.connect(lambda:window.show_global_search(window.global_search.text(),window._hub_scope))
         window.global_search_shortcut=QShortcut(QKeySequence('Ctrl+K'),window);window.global_search_shortcut.activated.connect(window._focus_global_search)
@@ -672,7 +686,7 @@ class SidebarFrame(QFrame):
             self._art_pixmap=QPixmap(str(path)) if path.exists() else QPixmap();self._art_cache[cache_key]=self._art_pixmap
         self._layout_art()
     def _layout_art(self):
-        if self._art_suppressed:self.art.hide();return
+        if self._art_suppressed or self.property("compact"):self.art.hide();return
         navigation=[child for child in self.findChildren(QWidget) if child is not self.art and isinstance(child,(QPushButton,QLabel)) and child.objectName() in {"nav","eyebrow","brand","tagline"} and child.isVisible()]
         safe_top=max((child.geometry().bottom() for child in navigation),default=0)+8
         rescan=self.findChild(QPushButton,"rescanButton");safe_bottom=(rescan.geometry().top()-8) if rescan and rescan.isVisible() else self.height()-8
@@ -1987,20 +2001,21 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
             _append_playback_log(f"LibraryPage reused=true elapsed_ms={(time.perf_counter()-navigation_started)*1000:.0f}");return
         page=QWidget(); outer=QVBoxLayout(page); outer.setContentsMargins(22,18,22,18); self._top_header(outer)
         from .hub_ui import ArtworkHero
-        overview=ArtworkHero();overview.setMinimumHeight(96)
+        overview=ArtworkHero();overview.library_overview=True;overview.setFixedHeight(174 if key=="all" else 98)
         overview_layout=QVBoxLayout(overview);overview_layout.setContentsMargins(18,10,18,12)
+        overview_layout.addStretch()
         eyebrow=QLabel("YOUR LIBRARY");eyebrow.setObjectName("eyebrow");overview_layout.addWidget(eyebrow)
         title=QLabel(requested); title.setObjectName("title");overview_layout.addWidget(title)
-        overview_layout.addStretch();outer.addWidget(overview)
-        controls=QHBoxLayout(); search=QLineEdit(search_text); search.setPlaceholderText("Search your library…"); controls.addWidget(search)
+        subtitle=QLabel("Browse and manage your anime collection");subtitle.setObjectName("muted");overview_layout.addWidget(subtitle);outer.addWidget(overview)
+        controls=CompactFilterLayout(38); search=QLineEdit(search_text); search.setPlaceholderText("Search your library…"); decorate_search(search);search.setMinimumWidth(170);controls.addWidget(search)
         category=QComboBox(); category.addItems(["All categories","Watching","Airing","Unwatched","Finished","Movies","Other"]); controls.addWidget(category); outer.addLayout(controls)
         state=QComboBox(); state.addItems(["All states","Watched","Unwatched","In Progress","Completed","Has Extras","Favorites"]); controls.addWidget(state)
         sort=QComboBox(); sort.addItems(["Title A-Z","Recently Added","Recently Watched","Progress","Year"]); controls.addWidget(sort)
         if category_filter and category.findText(category_filter)>=0: category.setCurrentText(category_filter)
         if state_filter and state.findText(state_filter)>=0: state.setCurrentText(state_filter)
         if sort_mode and sort.findText(sort_mode)>=0: sort.setCurrentText(sort_mode)
-        view=QComboBox();view.setObjectName('libraryViewMode');view.addItems(['Franchises','Individual Titles']);view.setCurrentText(view_mode);controls.addWidget(QLabel('View:'));controls.addWidget(view);view.setVisible(key=='all')
-        refresh_links=QPushButton('↻ Relationships');refresh_links.setToolTip('Refresh explicit AniList anime relationships');refresh_links.setVisible(key=='all');refresh_links.clicked.connect(lambda:self._request_library_relations(True));controls.addWidget(refresh_links)
+        view=QComboBox();view.setObjectName('libraryViewMode');view.addItems(['Franchises','Individual Titles']);view.setCurrentText(view_mode);view.setToolTip('Library view mode');controls.addWidget(view);view.setVisible(key=='all')
+        refresh_links=QPushButton('Relationships');refresh_links.setIcon(outline_icon('refresh-cw'));refresh_links.setToolTip('Refresh explicit AniList anime relationships');refresh_links.setVisible(key=='all');refresh_links.clicked.connect(lambda:self._request_library_relations(True));controls.addWidget(refresh_links)
         scroll=QScrollArea(); scroll.setWidgetResizable(True); grid=ResponsiveLibraryGrid(card_width=POSTER_CARD_WIDTH)
         db_started=time.perf_counter()
         cache_state="cached/reused"
@@ -2017,13 +2032,11 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
             if backdrop:
                 overview.banner.setPixmap(_scaled_artwork(backdrop,1000,150))
         genres={genre for item in catalog.values() for genre in (item.get('genres') or []) if isinstance(genre,str)}
-        filters=QHBoxLayout()
         format_filter=QComboBox();format_filter.addItems(['All formats']+sorted({str(item['format']) for item in catalog.values() if item.get('format')}))
         year_filter=QComboBox();year_filter.addItems(['All years']+sorted({str(item['seasonYear']) for item in catalog.values() if item.get('seasonYear')},reverse=True))
         genre_filter=QComboBox();genre_filter.addItems(['All genres']+sorted(genres))
-        for control in (format_filter,year_filter):filters.addWidget(control)
+        for control in (format_filter,year_filter):controls.addWidget(control)
         genre_filter.setParent(page);genre_filter.hide()
-        filters.addStretch();outer.addLayout(filters)
         from PySide6.QtWidgets import QButtonGroup
         status_group=QButtonGroup(page);status_chips=QHBoxLayout()
         for value in ('All','Watching','Planning','Paused','Completed','Dropped'):

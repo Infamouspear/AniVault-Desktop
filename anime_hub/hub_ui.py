@@ -57,7 +57,7 @@ class ArtworkHero(QFrame):
             if not branding and not getattr(self,'safe_banner',False):painter.drawPixmap(0,0,image,x,y,self.width(),self.height())
         gradient=QLinearGradient(0,0,self.width(),0)
         gradient.setColorAt(0,QColor(9,12,22,232));gradient.setColorAt(.52,QColor(9,12,22,172));gradient.setColorAt(1,QColor(9,12,22,35));painter.fillRect(self.rect(),gradient)
-        bottom=QLinearGradient(0,0,0,self.height());bottom.setColorAt(0,QColor(9,12,22,0));bottom.setColorAt(1,QColor(9,12,22,100));painter.fillRect(self.rect(),bottom);painter.end()
+        bottom=QLinearGradient(0,0,0,self.height());bottom.setColorAt(0,QColor(9,12,22,0));bottom.setColorAt(1,QColor("#090b10") if getattr(self,"library_overview",False) else QColor(9,12,22,100));painter.fillRect(self.rect(),bottom);painter.end()
 
 
 class SelectionHook(QObject):
