@@ -190,12 +190,47 @@ class DetailRail(QFrame):
         layout.addStretch();hint=QLabel('Double-click a card for full details');hint.setStyleSheet('color:#858394;font-size:11px');layout.addWidget(hint);self.body.setWidget(body)
 
 
+class ResumeArtwork(QLabel):
+    """Full-width cover above a text-safe fade, using the existing image loaders."""
+    def paintEvent(self,event):
+        from PySide6.QtGui import QPainterPath
+        from PySide6.QtCore import QRectF
+        painter=QPainter(self)
+        painter.setRenderHints(QPainter.Antialiasing|QPainter.SmoothPixmapTransform)
+        clip=QPainterPath();clip.addRoundedRect(QRectF(self.rect()),12,12)
+        painter.setClipPath(clip)
+        painter.fillRect(self.rect(),QColor('#1c2432'))
+        image=self.pixmap()
+        height=min(self.height(),140)
+        if image and not image.isNull():
+            scale=max(self.width()/image.width(),height/image.height())
+            width=self.width()/scale;source_height=height/scale
+            source=QRectF((image.width()-width)/2,(image.height()-source_height)*.18,width,source_height)
+            painter.drawPixmap(QRectF(0,0,self.width(),height),image,source)
+        else:
+            painter.setPen(QColor('#abb5c5'))
+            painter.drawText(QRectF(0,0,self.width(),90),Qt.AlignCenter,'No artwork')
+        fade=QLinearGradient(0,70,0,height)
+        fade.setColorAt(0,QColor(15,19,28,0));fade.setColorAt(1,QColor('#0f131c'))
+        painter.fillRect(QRectF(0,70,self.width(),height-70),fade)
+        painter.fillRect(QRectF(0,height,self.width(),self.height()-height),QColor('#0f131c'))
+
+
 class HomeTile(QFrame):
     def __init__(self,window,entity,continue_mode=False):
-        super().__init__();self.setObjectName('card');self.setProperty('posterCard',True);self.setFixedSize(146 if continue_mode else 132,190 if continue_mode else 140);self.setFocusPolicy(Qt.StrongFocus);self.setCursor(Qt.PointingHandCursor);self.entity=entity;self.item=entity.item
+        super().__init__();self.setObjectName('card');self.setProperty('posterCard',True);self.setFixedSize(216 if continue_mode else 132,194 if continue_mode else 140);self.setFocusPolicy(Qt.StrongFocus);self.setCursor(Qt.PointingHandCursor);self.entity=entity;self.item=entity.item
         layout=QVBoxLayout(self);layout.setContentsMargins(8,8,8,8);layout.setSpacing(5)
-        self.art=QLabel('NO ART');self.art.setFixedSize(130 if continue_mode else 116,96);self.art.setAlignment(Qt.AlignCenter);self.art.setStyleSheet('background:#202638;border-radius:7px;color:#7e879b');self.art.setAttribute(Qt.WA_TransparentForMouseEvents);layout.addWidget(self.art)
+        self.art=ResumeArtwork(self) if continue_mode else QLabel('NO ART')
+        self.art.setAttribute(Qt.WA_TransparentForMouseEvents)
+        if continue_mode:
+            self.art.setGeometry(self.rect());self.art.lower()
+            layout.setContentsMargins(12,8,12,9);layout.setSpacing(3);layout.addStretch()
+        else:
+            self.art.setFixedSize(116,96);self.art.setAlignment(Qt.AlignCenter)
+            self.art.setStyleSheet('background:#202638;border-radius:7px;color:#7e879b')
+            layout.addWidget(self.art)
         title=QLabel(entity.title);title.setFixedHeight(20);title.setToolTip(entity.title);title.setAttribute(Qt.WA_TransparentForMouseEvents);layout.addWidget(title);self.title=title
+        if continue_mode:title.setObjectName("cardTitle")
         local=entity.local
         summary=(local.get('active_label') or local.get('last_read_label') or 'Ready to read') if entity.media_type=='MANGA' and local else f"{local.get('watched_count') or 0} / {local.get('episode_count') or 0} watched" if local else entity.item.get('_recommendation_reason') or entity.label
         self.status_label=QLabel(summary);self.status_label.setObjectName('muted');self.status_label.setFixedHeight(18);self.status_label.setToolTip(summary);self.status_label.setAttribute(Qt.WA_TransparentForMouseEvents);layout.addWidget(self.status_label)
@@ -206,20 +241,23 @@ class HomeTile(QFrame):
             bar.setValue(int(local.get('progress') or 0) if entity.media_type=='MANGA' else int(local.get('watched_count') or 0))
             bar.setAttribute(Qt.WA_TransparentForMouseEvents);layout.addWidget(bar)
         if continue_mode:
-            action=QPushButton('Continue Reading' if entity.media_type=='MANGA' else '▶ Continue');action.setFixedHeight(28);action.setStyleSheet('padding:2px 7px;font-size:12px');action.clicked.connect(lambda:window._continue_hub_entity(entity));layout.addWidget(action)
+            from .icons import outline_icon
+            action=QPushButton('Continue Reading' if entity.media_type=='MANGA' else 'Continue');action.setIcon(outline_icon('circle-play'));action.setFixedHeight(28);action.setStyleSheet('padding:2px 7px;font-size:12px');action.clicked.connect(lambda:window._continue_hub_entity(entity));layout.addWidget(action)
         paths=window._entity_cover_paths([entity])
         if paths:
             from .app import _scaled_artwork
-            picture=_scaled_artwork(paths[0],self.art.width(),self.art.height()) if not continue_mode else QPixmap(str(paths[0])).scaled(self.art.size(),Qt.KeepAspectRatio,Qt.SmoothTransformation)
+            picture=_scaled_artwork(paths[0],self.art.width(),140 if continue_mode else self.art.height())
             if not picture.isNull():self.art.setPixmap(picture)
-        elif (entity.item.get('coverImage') or {}).get('large'):window._load_remote_artwork(entity.item['coverImage']['large'],self.art,self.art.width(),self.art.height())
+        elif (entity.item.get('coverImage') or {}).get('large'):window._load_remote_artwork(entity.item['coverImage']['large'],self.art,self.art.width(),140 if continue_mode else self.art.height())
         elif local and entity.media_type=='MANGA':window._load_manga_cover(local,self.art)
         window._register_status_card(self,entity.scope,entity.key)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(lambda pos:window.manga_menu(self,pos,local['id']) if local and entity.media_type=='MANGA' else window.anime_collection_menu(self,pos,local['id'],scope=entity.scope) if local else window.remote_anime_menu(self,pos,entity.item,entity.scope))
         self.window=window
     def resizeEvent(self,event):
-        super().resizeEvent(event);self.title.setText(QFontMetrics(self.title.font()).elidedText(self.entity.title,Qt.ElideRight,self.art.width()))
+        super().resizeEvent(event)
+        if isinstance(self.art,ResumeArtwork):self.art.setGeometry(self.rect())
+        self.title.setText(QFontMetrics(self.title.font()).elidedText(self.entity.title,Qt.ElideRight,self.width()-24))
     def mouseReleaseEvent(self,event):
         if event.button()==Qt.LeftButton:self.window._open_hub_entity(self.entity)
     def keyPressEvent(self,event):
