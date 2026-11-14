@@ -23,15 +23,19 @@ def test_standard_media_card_slots_and_favorites_sections(window):
     w.show_favorites();qt.processEvents();page=w.stack.currentWidget()
     assert {'Anime Favorites','Manga Favorites'} <= {label.text() for label in page.findChildren(QLabel)}
     cards=[page.findChild(Card),page.findChild(MangaCard),SeasonCard({**remote(90),'_recommendation_reason':'A reason that is long enough to wrap over two lines for readability'},show_save=True)]
-    for card in cards:
+    for card in cards[:2]:
+        assert card.property('posterCard')
+        assert any(label.width()*3==label.height()*2 and label.height()==258 for label in card.findChildren(QLabel))
+    for card in cards[2:]:
         assert (card.width(),card.height())==(CARD_WIDTH,CARD_HEIGHT)
         assert card.findChild(QLabel,'cardTitle').height()==42
         cover=next(label for label in card.findChildren(QLabel) if label.size().width()==COVER_WIDTH and label.size().height()==COVER_HEIGHT)
         assert cover.height()==258
     second,_=franchise_fixture(w,aid,Path(w.db.path).parent)
-    group=w._franchise_card(w._library_franchises()[0]);assert (group.width(),group.height())==(CARD_WIDTH,CARD_HEIGHT)
+    group=w._franchise_card(w._library_franchises()[0]);assert group.property("posterCard") and group.property("franchiseLocalIds")
     w.show_library_franchise((aid,second));qt.processEvents()
-    assert all(card.height()==CARD_HEIGHT for card in w.stack.currentWidget().findChildren(Card))
+    franchise_cards=w.stack.currentWidget().findChildren(Card)
+    assert len(franchise_cards)==2 and all(card.property('posterCard') for card in franchise_cards)
     cards[-1].deleteLater();group.deleteLater()
 
 

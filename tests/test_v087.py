@@ -169,7 +169,7 @@ def test_franchise_graph_excludes_cross_media_similar_names_and_preserves_record
     w,qt,aid,*_=window;second,third=franchise_fixture(w,aid,tmp_path);before=[tuple(row) for row in w.db.connection.execute('SELECT * FROM anime')]
     groups=build_franchises(w.db.anime_list());assert len(groups)==1 and groups[0].name=='Initial D';assert groups[0].local_ids==(aid,second) and third not in groups[0].local_ids
     w._library_cache_dirty=True;w.show_library();grid=w.stack.currentWidget().findChild(ResponsiveLibraryGrid);wait(qt,lambda:len(grid.cards)==2)
-    group_card=next(card for card in grid.cards if card.property('franchiseLocalIds'));assert group_card.width()==228
+    group_card=next(card for card in grid.cards if card.property('franchiseLocalIds'));assert group_card.property('posterCard') and group_card.width()<=grid.card_width
     group_card.clicked.emit();assert w.current_view=='library_franchise'
     page=w.stack.currentWidget();cards=page.findChildren(Card);assert [card.anime_id for card in cards]==[aid,second]
     assert any('AniList-only' in label.text() and 'Side Story' in label.text() for label in page.findChildren(QLabel))

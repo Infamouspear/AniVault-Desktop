@@ -176,7 +176,7 @@ class LibraryFranchiseMixin:
         for row in group.rows:
             entity=store.resolve('local:'+str(row['id']));card=self._entity_card(entity)
             relation=' / '.join(sorted({relation.replace('_',' ').title() for source,target,relation in group.edges if source==row['anilist_id']})) or 'Related'
-            label=QLabel(f"{metadata(row).get('format') or 'Anime'} · In Vault · {row['watched_count'] or 0} / {row['episode_count'] or 0} watched\n{entity.status or 'No manual status'} · {relation}");label.setWordWrap(True);label.setObjectName('muted');label.setAlignment(Qt.AlignCenter);card.note.setText(label.text());label.deleteLater();grid.add_card(card)
+            label=QLabel(f"{metadata(row).get('format') or 'Anime'} · In Vault · {row['watched_count'] or 0} / {row['episode_count'] or 0} watched\n{entity.status or 'No manual status'} · {relation}");label.setWordWrap(True);label.setObjectName('muted');label.setAlignment(Qt.AlignCenter);card.status_label.setText(relation);card.status_label.setToolTip(label.text());label.deleteLater();grid.add_card(card)
         remote_nodes={}
         local_anilist={row['anilist_id'] for row in group.rows}
         for row in group.rows:

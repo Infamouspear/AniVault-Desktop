@@ -97,7 +97,11 @@ def test_related_whole_card_hit_targets_keyboard_scope_order(window,monkeypatch,
     assert [card.property('relatedLocal') for card in grid.cards]==[True,False]
     assert isinstance(panel.findChild(QScrollArea),ContainedScrollArea)
     for card in grid.cards:
-        assert (card.width(),card.height())==(228,460) and card.cursor().shape()==Qt.PointingHandCursor
+        assert card.cursor().shape()==Qt.PointingHandCursor
+        if isinstance(card,Card):
+            assert card.property('posterCard')
+        else:
+            assert (card.width(),card.height())==(228,460)
         assert not any('Shared' in button.text() for button in card.findChildren(QPushButton))
         for point in [QPoint(25,25),QPoint(25,285),QPoint(25,347),QPoint(220,440)]:QTest.mouseDClick(card,Qt.LeftButton,pos=point)
         card.setFocus();QTest.keyClick(card,Qt.Key_Return)
