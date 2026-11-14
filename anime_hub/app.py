@@ -435,6 +435,7 @@ class SeasonCard(QFrame):
             box=QHBoxLayout(footer);box.setContentsMargins(0,0,0,0);self.save_button=QPushButton('Saved' if saved else 'Save');self.save_button.setFixedHeight(28);self.save_button.setStyleSheet('padding:3px 7px');self.save_button.setProperty('saved',saved);self.save_button.clicked.connect(self._toggle_saved);box.addWidget(self.save_button)
         elif not compact:layout.addSpacing(28)
         layout.addSpacing(6);card_input(self)
+        if compact:self.setFixedHeight(max(self.height(),layout.minimumSize().height()))
     def _toggle_saved(self):
         value=not bool(self.save_button.property('saved'));self.save_button.setProperty('saved',value);self.save_button.setText('Saved' if value else 'Save');self.save_toggled.emit(int(self.item['id']),value)
     def mousePressEvent(self,event):
@@ -1584,7 +1585,7 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
             if button:
                 button.setFixedHeight(26);button.setStyleSheet('padding:2px 8px')
                 card.layout().addWidget(button)
-                card.setFixedHeight(max(card.height(),400 if item.get('_recommendation_reason') else 374))
+                card.setFixedHeight(max(card.height(),card.layout().minimumSize().height()))
         key=f"manga:{local_row['id']}" if is_manga and local_row else self.db.entity_key_for_anime(local_row["id"]) if local_row else f"anilist:{int(item['id'])}"
         self._register_status_card(card,scope,key);self._register_status_card(card,scope,f"anilist:{int(item['id'])}")
         card.clicked.connect(lambda _:self.show_manga_detail(local_row["id"]) if is_manga and local_row else self.show_detail(local_row["id"]) if local_row else self.show_remote_anilist(item,source))

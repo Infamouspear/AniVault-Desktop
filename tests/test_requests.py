@@ -41,7 +41,7 @@ def test_availability_requires_exact_normal_match_and_remove_is_independent(tmp_
 
 
 def test_discover_button_updates_existing_request(monkeypatch,tmp_path):
-    from PySide6.QtWidgets import QApplication,QPushButton
+    from PySide6.QtWidgets import QApplication,QLabel,QPushButton
     from anime_hub import app
     monkeypatch.setattr(app,'APP_DIR',tmp_path)
     window=app.Window()
@@ -50,6 +50,13 @@ def test_discover_button_updates_existing_request(monkeypatch,tmp_path):
         item={'id':345,'type':'ANIME','isAdult':False,'title':{'english':'Demo'}}
         card=window._make_discover_card(item,{})
         action=next(b for b in card.findChildren(QPushButton) if b.text()=='Request Anime')
+        card.show()
+        QApplication.processEvents()
+        poster = next(label for label in card.findChildren(QLabel) if label.text() == 'LOADING ARTWORK')
+        title = card.findChild(QLabel, 'cardTitle')
+        assert poster.geometry().bottom() < title.geometry().top()
+        assert title.geometry().bottom() < action.geometry().top()
+        assert card.contentsRect().contains(action.geometry())
         action.click()
         assert action.text()=='Requested'
         action.click();QApplication.processEvents()
