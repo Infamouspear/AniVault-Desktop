@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from shiboken6 import isValid
 
-from PySide6.QtCore import QEvent, Qt, QThread, Signal, QObject, QSize, QStringListModel, QTimer, QUrl, qInstallMessageHandler
+from PySide6.QtCore import QBuffer, QEvent, Qt, QThread, Signal, QObject, QSize, QStringListModel, QTimer, QUrl, qInstallMessageHandler
 from PySide6.QtGui import QDesktopServices, QColor, QFontMetrics, QIcon, QKeySequence, QLinearGradient, QPainter, QPixmap, QImageReader, QShortcut, QTextLayout, QTextOption
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkDiskCache, QNetworkReply
 from PySide6.QtWidgets import (QAbstractScrollArea, QApplication, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
@@ -175,7 +175,7 @@ def _bound_pixmap_cache(cache):
 
 
 def _scaled_artwork(path,width,height):
-    if not path or not Path(path).exists(): return QPixmap()
+    if not path: return QPixmap()
     try: stamp=Path(path).stat().st_mtime_ns
     except OSError: return QPixmap()
     key=(str(path),stamp,int(width),int(height))
@@ -557,7 +557,9 @@ class ResponsiveLibraryGrid(QWidget):
     def clear_cards(self):
         old=list(self.cards); self.cards=[]
         while self.grid.count(): self.grid.takeAt(0)
-        for card in old: card.setParent(None); card.deleteLater()
+        for card in old:
+            card.hide()
+            card.deleteLater()
         self._update_height()
     def _reflow(self,force=False):
         columns=self.columns_for_width(self.contentsRect().width())
@@ -1107,8 +1109,9 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
             if event.button()==Qt.ForwardButton: self.navigate_forward(); return True
         return super().eventFilter(obj,event)
 
-    def _display_title(self, row):
-        metadata=json.loads(row["metadata_json"] or "{}")
+    def _display_title(self, row, metadata=None):
+        if metadata is None:
+            metadata=json.loads(row["metadata_json"] or "{}")
         return (metadata.get("title",{}).get("english") or metadata.get("title",{}).get("romaji")
                 or row["parsed_search_title"] or row["title"] or row["source_folder_name"] or "Unknown Anime")
 
@@ -1555,8 +1558,17 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         request=QNetworkRequest(QUrl(url));request.setAttribute(QNetworkRequest.CacheLoadControlAttribute,QNetworkRequest.PreferCache);request.setTransferTimeout(15000)
         reply=self._network.get(request)
         def finished():
-            data=bytes(reply.readAll()); pixmap=QPixmap(); pixmap.loadFromData(data)
-            scaled=pixmap.scaled(width,height,Qt.KeepAspectRatioByExpanding,Qt.SmoothTransformation) if not pixmap.isNull() else QPixmap()
+            buffer=QBuffer()
+            buffer.setData(reply.readAll())
+            buffer.open(QBuffer.OpenModeFlag.ReadOnly)
+            reader=QImageReader(buffer)
+            size=reader.size()
+            if size.isValid():
+                reader.setScaledSize(size.scaled(width,height,Qt.KeepAspectRatioByExpanding))
+            image=reader.read()
+            if not image.isNull():
+                image=image.scaled(width,height,Qt.KeepAspectRatioByExpanding,Qt.SmoothTransformation)
+            scaled=QPixmap.fromImage(image)
             key=(url,width,height)
             if not scaled.isNull():
                 self._remote_artwork_cache[key]=scaled;_bound_pixmap_cache(self._remote_artwork_cache)
@@ -2013,7 +2025,7 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         self.library_context['view_mode']=view_mode
         page_key=(category_filter,state_filter,sort_mode,search_text,view_mode,genre,self._library_relation_revision)
         cached=self._library_page_cache.get(page_key)
-        if cached and isValid(cached[0]) and cached[1]==self.db.connection.total_changes and not self._library_cache_dirty:
+        if cached and isValid(cached[0]) and cached[1]==stamp and not self._library_cache_dirty:
             self.replace(cached[0]);resume=getattr(cached[0],'resume_population',None)
             if resume:QTimer.singleShot(0,resume)
             _append_playback_log(f"LibraryPage reused=true elapsed_ms={(time.perf_counter()-navigation_started)*1000:.0f}");return
@@ -2041,9 +2053,20 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
             rows=self.db.anime_list(); self._library_rows_cache=rows; self._library_cache_dirty=False
             cache_state="first load" if requested not in self._view_loads else "rebuilt"
         else: rows=self._library_rows_cache
-        status_map={r['entity_key']:r['status'] for r in self.db.connection.execute("SELECT entity_key,status FROM manual_status WHERE scope='normal'")}
         from .library_franchises import metadata as library_metadata
-        catalog={row['id']:library_metadata(row) for row in rows if self.db.anime_scope(row)=='normal'}
+
+        def project(source):
+            scopes = self.db.anime_scope_map(source)
+            normal = [row for row in source if scopes[row["id"]] == "normal"]
+            catalog = {row["id"]: library_metadata(row) for row in normal}
+            titles = {row["id"]: self._display_title(row, catalog[row["id"]]).casefold()
+                      for row in normal}
+            statuses = dict(self.db.connection.execute(
+                "SELECT entity_key,status FROM manual_status WHERE scope='normal'"))
+            return normal, catalog, titles, statuses
+
+        normal_rows, catalog, titles, status_map = project(rows)
+        projection_stamp = stamp
         if key=="all":
             backdrop=next((item.get('banner_path') or item.get('cover_path') for item in catalog.values()
                            if item.get('banner_path') or item.get('cover_path')),None)
@@ -2074,21 +2097,47 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         genre_layout.addStretch();genre_strip.setWidget(genre_body);outer.addWidget(genre_strip)
         def row_key(row):return 'anilist:'+str(row['anilist_id']) if row['anilist_id'] else 'local:'+str(row['id'])
         old=self._library_page_cache.get(page_key)
-        if old and old[0] is not self.stack.currentWidget() and isValid(old[0]):self.stack.removeWidget(old[0]);old[0].deleteLater()
-        self._library_page_cache[page_key]=(page,self.db.connection.total_changes)
+        if old and isValid(old[0]):
+            if old[0] is self.stack.currentWidget():
+                old[0].setProperty("transientPage", True)
+            else:
+                self.stack.removeWidget(old[0])
+                old[0].deleteLater()
+        self._library_page_cache[page_key]=(page,projection_stamp)
         if len(self._library_page_cache)>8:
             retired_key=next(k for k in self._library_page_cache if k!=page_key);retired=self._library_page_cache.pop(retired_key)[0]
-            if retired is not self.stack.currentWidget() and isValid(retired):self.stack.removeWidget(retired);retired.deleteLater()
+            if isValid(retired):
+                if retired is self.stack.currentWidget():
+                    retired.setProperty("transientPage", True)
+                else:
+                    self.stack.removeWidget(retired)
+                    retired.deleteLater()
         self._view_loads[requested]=self._view_loads.get(requested,0)+1
         db_elapsed=time.perf_counter()-db_started
         _append_playback_log(f"Page render mode: {cache_state}")
-        generation={"value":0}; metrics={}
+        generation={"value":0}
+        search_delay = QTimer(page)
+        search_delay.setSingleShot(True)
+        search_delay.setInterval(90)
         def rebuild():
+            nonlocal rows, normal_rows, catalog, titles, status_map, projection_stamp
+            if self._closing or self.stack.currentWidget() is not page:
+                return
+            search_delay.stop()
+            current_stamp = self.db.change_stamp()
+            if current_stamp != projection_stamp:
+                rows = self.db.anime_list()
+                normal_rows, catalog, titles, status_map = project(rows)
+                projection_stamp = current_stamp
             generation["value"]+=1; active_generation=generation["value"]
             grid.clear_cards()
             prepared_started=time.perf_counter()
-            visible=[r for r in rows if self.db.anime_scope(r)=='normal' and search.text().casefold() in self._display_title(r).casefold() and
-                     (category.currentIndex()==0 or r["category"].casefold()==category.currentText().casefold()) and (r["personal_rating_units"] is None if state.currentText()=="Unrated" else self._state_matches(r,state.currentText()))]
+            query = search.text().casefold()
+            category_name = category.currentText().casefold() if category.currentIndex() else None
+            state_name = state.currentText()
+            visible=[r for r in normal_rows if query in titles[r["id"]] and
+                     (category_name is None or r["category"].casefold()==category_name) and
+                     (r["personal_rating_units"] is None if state_name=="Unrated" else self._state_matches(r,state_name))]
             selected=status_group.checkedButton().text()
             visible=[r for r in visible if
                 (selected=='All' or status_map.get(row_key(r))==selected
@@ -2101,8 +2150,8 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
             if key=="Recently Added": visible.sort(key=lambda r:r["added_at"] or "",reverse=True)
             elif key=="Recently Watched": visible.sort(key=lambda r:r["last_watched_at"] or "",reverse=True)
             elif key=="Progress": visible.sort(key=lambda r:(r["watched_count"] or 0)/max(r["episode_count"] or 0,1),reverse=True)
-            elif key=="Year": visible.sort(key=lambda r:(json.loads(r["metadata_json"] or "{}").get("seasonYear") or r["detected_year"] or 0),reverse=True)
-            else: visible.sort(key=lambda r:self._display_title(r).casefold())
+            elif key=="Year": visible.sort(key=lambda r:(catalog[r['id']].get("seasonYear") or r["detected_year"] or 0),reverse=True)
+            else: visible.sort(key=lambda r:titles[r["id"]])
             if view.currentText()=='Franchises' and self.active_nav_key=='all':
                 groups=build_franchises(visible,self._library_relation_data);membership={row['id']:group for group in groups for row in group.rows};emitted=set();presentations=[]
                 for row in visible:
@@ -2113,10 +2162,10 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
                         emitted.add(identity);presentations.append({**dict(row),'_franchise':group})
                     else:presentations.append(row)
                 visible=presentations
-            metrics[active_generation]={"prepare":time.perf_counter()-prepared_started,"widgets":0.0,"artwork":0.0,"first":None}
+            timing={"prepare":time.perf_counter()-prepared_started,"widgets":0.0,"artwork":0.0,"first":None}
             def add_batch(start=0):
                 if self._closing or not isValid(grid) or self.stack.currentWidget() is not page or generation["value"]!=active_generation or len(grid.cards)!=start: return
-                batch_started=time.perf_counter(); batch_end=min(start+10,len(visible)); timing=metrics[active_generation];batch=[]
+                batch_started=time.perf_counter(); batch_end=min(start+10,len(visible)); batch=[]
                 for i in range(start,batch_end):
                     row=visible[i]; card_started=time.perf_counter()
                     if isinstance(row,dict) and row.get('_franchise'):card=self._franchise_card(row['_franchise'])
@@ -2133,7 +2182,12 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
                     _append_playback_log(f"Card widget creation: {timing['widgets']*1000:.0f} ms\nArtwork loading/scaling: {timing['artwork']*1000:.0f} ms\nLibrary population complete: {(time.perf_counter()-navigation_started)*1000:.0f} ms ({len(visible)} cards)")
             if not visible:grid.add_card(self._empty_state('results' if search.text() or category.currentIndex() or state.currentIndex() else 'empty','No matching anime.' if rows else 'Nothing here yet.',copy='Change filters or add your local library.'))
             else:add_batch()
-        search.textChanged.connect(rebuild); category.currentTextChanged.connect(rebuild); state.currentTextChanged.connect(rebuild); sort.currentTextChanged.connect(rebuild)
+        def schedule_search(_):
+            page.resume_population = rebuild
+            search_delay.start()
+        search.textChanged.connect(schedule_search)
+        search_delay.timeout.connect(rebuild)
+        category.currentTextChanged.connect(rebuild); state.currentTextChanged.connect(rebuild); sort.currentTextChanged.connect(rebuild)
         for control in (format_filter,year_filter,genre_filter):control.currentIndexChanged.connect(rebuild)
         status_group.buttonClicked.connect(rebuild)
         page.refresh_franchises=rebuild

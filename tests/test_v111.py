@@ -78,6 +78,36 @@ def test_scan_connection_changes_invalidate_library_and_organization(window):
     assert w.organization('normal').resolve('local:'+str(aid)) is None
 
 
+def test_library_search_coalesces_edits_and_refreshes_scope(window):
+    from PySide6.QtWidgets import QLineEdit
+
+    w, qt, aid, *_ = window
+    w.show_library(view_mode="Individual Titles")
+    assert {card.anime_id for card in cards(w)} == {aid}
+    page = w.stack.currentWidget()
+    search = page.findChild(QLineEdit)
+    statements = []
+    w.db.connection.set_trace_callback(statements.append)
+    try:
+        for text in ("a", "an", "ani", ""):
+            search.setText(text)
+        assert not statements
+        QTest.qWait(140)
+        assert {card.anime_id for card in cards(w)} == {aid}
+        assert not any("SELECT * FROM ANIME WHERE ID" in sql.upper() for sql in statements)
+    finally:
+        w.db.connection.set_trace_callback(None)
+
+    other = Database(w.db_path)
+    try:
+        other.set_metadata(aid, 11, remote(11, adult=True))
+    finally:
+        other.connection.close()
+    search.setText("Shared")
+    QTest.qWait(140)
+    assert not cards(w)
+
+
 def test_restricted_discovery_opens_shared_local_episode_view(window,tmp_path):
     w,qt,*_=window
     aid=anime(w.db,tmp_path/'Private',77,True)
