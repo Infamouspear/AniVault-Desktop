@@ -422,6 +422,7 @@ class HubMixin:
         manga_sizes=[r[1:] for r in self.db.connection.execute("SELECT series_id,count(*),count(size_bytes),coalesce(sum(size_bytes),0) FROM manga_items WHERE present=1 GROUP BY series_id") if r[0] in manga_ids]
         data['storage']=storage_text(anime_sizes+manga_sizes)
         data['storage_split']=(storage_text(anime_sizes),storage_text(manga_sizes))
+        data['storage_bytes']=tuple(sum(row[2] for row in sizes) for sizes in (anime_sizes,manga_sizes))
         self._dashboard_cache=(stamp,anime,manga,episodes,data)
         return anime,manga,episodes,data
 
@@ -431,9 +432,8 @@ class HubMixin:
         page=QWidget();page.setProperty('transientPage',True);shell=QVBoxLayout(page)
         scroll=QScrollArea();scroll.setWidgetResizable(True);shell.addWidget(scroll)
         body=QWidget();layout=QVBoxLayout(body);layout.setContentsMargins(22,18,22,18)
-        title=QLabel('Statistics');title.setObjectName('title');layout.addWidget(title)
         anime,manga,_,data=self._dashboard_data()
-        layout.addWidget(analytics(self,data,list(anime.values()),manga))
+        layout.addWidget(analytics(self,data,list(anime.values()),manga,scroll.viewport()))
         layout.addStretch();scroll.setWidget(body);self.replace(page)
 
     def show_home(self):

@@ -74,3 +74,35 @@ def test_rating_histogram_and_overlapping_genres():
     rated,histogram,genres=rating_summary(entries)
     assert len(rated)==3 and histogram=={2:1,19:2}
     assert genres['Drama']==genres['Action']==[2,19,19]
+
+
+
+def test_statistics_uses_title_completion_and_reflows(monkeypatch, tmp_path):
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication, QScrollArea
+    from anime_hub import app
+    from anime_hub.dashboard import Donut
+
+    application = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(app, "APP_DIR", tmp_path)
+    window = app.Window()
+    try:
+        completed = window.db.upsert_anime("complete", "Complete", "", "Other", str(tmp_path))
+        window.db.upsert_anime("unassigned", "Unassigned", "", "Other", str(tmp_path))
+        window.db.set_manual_status("Completed", "normal", anime_id=completed)
+        window.resize(1600, 950)
+        window.show()
+        window.show_statistics()
+        QTest.qWait(60)
+        page = window.stack.currentWidget()
+        completion = next(ring for ring in page.findChildren(Donut) if ring.label == "Completed")
+        assert completion.number == "50%"
+        assert completion.values == [1, 1]
+        window.resize(940, 760)
+        QTest.qWait(60)
+        scroll = page.findChild(QScrollArea)
+        assert scroll.horizontalScrollBar().maximum() == 0
+        assert scroll.verticalScrollBar().maximum() > 0
+    finally:
+        window.close()
+        application.processEvents()
