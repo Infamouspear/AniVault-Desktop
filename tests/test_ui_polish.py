@@ -72,7 +72,8 @@ def test_sidebar_active_state_and_frameless_shell(tmp_path,monkeypatch):
     assert window.nav_buttons["favorites"].property("active") is True
     assert window.nav_buttons["home"].property("active") is False
     window.show_library(category_filter="Watching")
-    assert window.nav_buttons["watching"].property("active") is True
+    assert "watching" not in window.nav_buttons
+    assert window.nav_buttons["home"].property("active") is True
     window.show_settings()
     assert window.nav_buttons["settings"].property("active") is True
     window.close()

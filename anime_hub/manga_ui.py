@@ -59,14 +59,15 @@ class MangaLibraryMixin:
             for signal,slot in [(self._manga_jobs.scanned,self._manga_scanned),(self._manga_jobs.scan_failed,self._manga_scan_failed),(self._manga_jobs.cover_ready,self._manga_cover_ready)]:signal.disconnect(slot)
     def _manga_scan_failed(self,message):
         if self._manga_closing:return
-        self._manga_scan_busy=False;ui()._append_playback_log('MangaScanError '+message);self.statusBar().showMessage('Manga scan failed; previous library state is preserved.',7000)
+        self._manga_scan_busy=False;ui()._append_playback_log('Restricted manga scan failed' if getattr(self,'_manga_scan_scope','normal')=='restricted' else 'MangaScanError '+message);self.statusBar().showMessage('Manga scan failed; previous library state is preserved.',7000)
     def scan_manga_library(self):
         scope=self.manga_context['scope']
         if not self._manga_allowed(scope):return
         roots=[root for root in self.manga_store.roots() if root['scope']==scope]
         if not roots:self.manage_manga_roots(self.manga_context['scope']);return
         if self._ensure_manga_jobs().scan(roots):
-            self._manga_scan_busy=True;ui()._append_playback_log('MangaScanStart roots='+json.dumps([r['path'] for r in roots]));self.statusBar().showMessage('Scanning manga read-only…')
+            self._manga_scan_scope=scope
+            self._manga_scan_busy=True;ui()._append_playback_log('Restricted manga scan started' if scope=='restricted' else 'MangaScanStart roots='+json.dumps([r['path'] for r in roots]));self.statusBar().showMessage('Scanning manga read-only…')
     def _manga_scanned(self,result):
         if self._manga_closing:return
         self._manga_scan_busy=False
@@ -75,12 +76,12 @@ class MangaLibraryMixin:
         # Cap detail logging, while preserving summary totals for large libraries.
         logged=0
         for series in result['series'].values():
-            if logged<100:ui()._append_playback_log(f"MangaSeriesDetected title={series['title']} path={series['root_path']} item_count={len(series['items'])}")
+            if logged<100 and getattr(self,"_manga_scan_scope","normal")=="normal":ui()._append_playback_log(f"MangaSeriesDetected title={series['title']} path={series['root_path']} item_count={len(series['items'])}")
             for item in series['items']:
-                if logged<100:ui()._append_playback_log(f"MangaItemDetected path={item['path']} source_type={item['source_type']} volume={item['volume']} chapter={item['chapter']}")
+                if logged<100 and getattr(self,"_manga_scan_scope","normal")=="normal":ui()._append_playback_log(f"MangaItemDetected path={item['path']} source_type={item['source_type']} volume={item['volume']} chapter={item['chapter']}")
                 logged+=1
         ui()._append_playback_log('MangaScanSummary '+' '.join(f'{k}={v}' for k,v in summary.items())+f' detail_logs_capped={logged>100}')
-        for error in result['errors'][:10]:ui()._append_playback_log('MangaScanError '+error)
+        for error in result['errors'][:10]:ui()._append_playback_log('Restricted manga scan error' if getattr(self,'_manga_scan_scope','normal')=='restricted' else 'MangaScanError '+error)
         self._manga_cover_attempts.clear();self.statusBar().showMessage(f"Manga scan: {summary['series']} series, {summary['items']} items; {summary['errors']} errors",8000)
         if self.current_view in {'manga_library','restricted_manga_library'}:self.show_manga_library(**self.manga_context)
         elif self.current_view in {'manga_detail','restricted_manga_detail'}:self.show_manga_detail(self.current_manga_id)
@@ -115,11 +116,8 @@ class MangaLibraryMixin:
         rows=self.manga_store.series_list(scope)
         from .desktop_ui import library_header,decorate_search
         from .polish_ui import CompactFilterLayout
-        if scope=='normal':
-            artwork=next((path for row in rows for path in (row.get('manual_cover_path'),row.get('cover_path')) if path and Path(path).is_file()),None)
-            outer.addWidget(library_header('YOUR LIBRARY','Manga','Browse and manage your manga collection',artwork))
-        else:
-            title=QLabel('Restricted Local Manga');title.setObjectName('title');outer.addWidget(title)
+        artwork=next((path for row in rows for path in (row.get('manual_cover_path'),row.get('cover_path')) if path and Path(path).is_file()),None)
+        outer.addWidget(library_header('RESTRICTED ARCHIVE' if scope=='restricted' else 'YOUR LIBRARY','Manga','Browse and manage your manga collection',artwork))
         header=CompactFilterLayout(38)
         for label,action in [('Roots…',lambda:self.manage_manga_roots(scope)),('Rescan Manga',self.scan_manga_library),('Open Manga / Comic…',self.choose_local_manga)]:
             button=QPushButton(label);button.clicked.connect(action);header.addWidget(button)
@@ -243,7 +241,7 @@ class MangaLibraryMixin:
         if self._manga_closing:return
         item=self.manga_store.item(iid)
         if not item:return
-        if error:ui()._append_playback_log(f'MangaCoverError item={iid} exception={error}');return
+        if error:ui()._append_playback_log('Restricted manga cover failed' if item.get('scope')=='restricted' else f'MangaCoverError item={iid} exception={error}');return
         self.db.connection.execute('UPDATE manga_series SET cover_path=? WHERE id=?',(path,item['series_id']));self.db.connection.commit()
         for ref in self._manga_cover_refs.get(item['series_id'],[]):
             card=ref()

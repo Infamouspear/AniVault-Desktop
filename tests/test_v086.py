@@ -121,12 +121,12 @@ def test_fullscreen_reader_player_chrome_and_geometry(window):
             if w.isFullScreen():toggle()
             setattr(w,'manga_reader_page' if kind=='reader' else 'player_page',None);viewer.deleteLater()
 
-def test_restricted_home_reuse_and_lock(window,monkeypatch):
+def test_restricted_overview_refresh_and_lock(window,monkeypatch):
     w,qt,*_=window;requests=[];w.db.set_setting('restricted_unlocked','1');application_style=qt.styleSheet()
     monkeypatch.setattr(w,'_request_discover_page',lambda params,success,failure:(requests.append(params),success({'items':[]})))
     w.show_restricted_home();qt.processEvents();page=w.stack.currentWidget();count=len(requests)
     w.show_home();w.show_restricted_home();qt.processEvents()
-    assert w.stack.currentWidget() is page and len(requests)==count
+    assert w.stack.currentWidget() is not page and len(requests)==count==0
     w.lock_restricted();assert not w.current_view.startswith('restricted') and not w.restricted_button.isVisible()
     assert all(params.get('is_adult') is True for params in requests)
     assert qt.styleSheet()==application_style and w.property('restrictedTheme') is False

@@ -346,13 +346,13 @@ class HubMixin:
         self._hub_rail_dismissed=False;self.context_rail.show_entity(entity);self._update_hub_rail_visibility()
     def _update_hub_rail_visibility(self):
         if not hasattr(self,'context_rail'):return
-        supported={'home','library','manga_library','restricted_manga_library','discover','restricted_discover','airing','discover_all','restricted_all','favorites','restricted_favorites','global_search','restricted_global_search','collection_detail','restricted_collection_detail','status_list','restricted_status_list','restricted_home','airing_all','saved','restricted_saved','franchise_detail','library_franchise','restricted_library_franchise'}
+        supported={'restricted_library','home','library','manga_library','restricted_manga_library','discover','restricted_discover','airing','discover_all','restricted_all','favorites','restricted_favorites','global_search','restricted_global_search','collection_detail','restricted_collection_detail','status_list','restricted_status_list','restricted_home','airing_all','saved','restricted_saved','franchise_detail','library_franchise','restricted_library_franchise'}
         self.context_rail.setVisible(self.width()>=1260 and self.current_view in supported and self.context_rail.entity is not None and not self._hub_rail_dismissed)
     def _prepare_hub_page(self):
         previous=self._hub_selection_page() if self._hub_selection_page else None
         if previous is not self.stack.currentWidget():
             self._cancel_hub_hover();self._unpin_hub_selection();self._hub_focus_group=None;self._hub_rail_dismissed=False;self._hub_selection_page=weakref.ref(self.stack.currentWidget())
-        scope='restricted' if self.current_view.startswith('restricted') else 'normal'
+        scope='restricted' if self._is_restricted_view() else 'normal'
         if scope!=self._hub_scope:
             self._hub_scope=scope;self.context_rail.clear();self.global_suggestions.dismiss();self.global_suggestions.results=[];self.global_suggestions.clear();self.global_suggestions.scope=scope;self.global_search.clear()
         if self.context_rail.property('restricted')!=(scope=='restricted'):
@@ -391,7 +391,7 @@ class HubMixin:
         if not entities:
             if title not in {'Continue Watching','Continue Reading'}:return None
             label=QLabel(title);label.setObjectName('section');outer.addWidget(label)
-            button=QPushButton('All caught up · Browse your library');button.clicked.connect(self.show_library);outer.addWidget(button,0,Qt.AlignLeft);return None
+            button=QPushButton('All caught up · Browse your library');button.clicked.connect(lambda:self.show_library(scope='restricted' if self._is_restricted_view() else 'normal'));outer.addWidget(button,0,Qt.AlignLeft);return None
         header=QHBoxLayout();label=QLabel(title);label.setObjectName('section');header.addWidget(label);header.addStretch()
         if shortcut:
             button=QPushButton('View all');button.clicked.connect(shortcut);header.addWidget(button)
@@ -400,12 +400,13 @@ class HubMixin:
         body=QWidget();layout=QHBoxLayout(body);layout.setContentsMargins(0,0,0,0);layout.setSpacing(12);layout.setAlignment(Qt.AlignLeft)
         for entity in entities[:12]:layout.addWidget(HomeTile(self,entity,continue_mode))
         strip.setWidget(body);outer.addWidget(strip);return strip
-    def _dashboard_data(self):
+    def _dashboard_data(self,scope="normal"):
+        if not self._organization_allowed(scope):raise PermissionError("Archive is locked")
         from .dashboard import summarize
         stamp=self.db.change_stamp()
         cached=getattr(self,'_dashboard_cache',None)
-        if cached and cached[0]==stamp:return cached[1:]
-        store=self.organization('normal')
+        if cached and cached[0]==(scope,stamp):return cached[1:]
+        store=self.organization(scope)
         local=[e for e in store.entities.values() if e.local]
         anime={e.local['id']:e for e in local if e.media_type=='ANIME'}
         manga=[e for e in local if e.media_type=='MANGA']
@@ -423,28 +424,33 @@ class HubMixin:
         data['storage']=storage_text(anime_sizes+manga_sizes)
         data['storage_split']=(storage_text(anime_sizes),storage_text(manga_sizes))
         data['storage_bytes']=tuple(sum(row[2] for row in sizes) for sizes in (anime_sizes,manga_sizes))
-        self._dashboard_cache=(stamp,anime,manga,episodes,data)
+        self._dashboard_cache=((scope,stamp),anime,manga,episodes,data)
         return anime,manga,episodes,data
 
-    def show_statistics(self):
+    def show_statistics(self,scope="normal"):
+        scope="restricted" if scope=="restricted" else "normal"
         from .dashboard import analytics
-        self.current_view='statistics';self.current_anime_id=None;self._set_active_nav('statistics')
+        if not self._organization_allowed(scope):return
+        self.current_view='restricted_statistics' if scope=='restricted' else 'statistics';self.current_anime_id=None;self._set_active_nav('statistics')
         page=QWidget();page.setProperty('transientPage',True);shell=QVBoxLayout(page)
         scroll=QScrollArea();scroll.setWidgetResizable(True);shell.addWidget(scroll)
         body=QWidget();layout=QVBoxLayout(body);layout.setContentsMargins(22,18,22,18)
-        anime,manga,_,data=self._dashboard_data()
-        layout.addWidget(analytics(self,data,list(anime.values()),manga,scroll.viewport()))
+        anime,manga,_,data=self._dashboard_data(scope)
+        layout.addWidget(analytics(self,data,list(anime.values()),manga,scroll.viewport(),scope))
         layout.addStretch();scroll.setWidget(body);self.replace(page)
 
-    def show_home(self):
+    def show_home(self,scope="normal"):
+        scope="restricted" if scope=="restricted" else "normal"
         from .desktop_ui import stats_strip
         from .dashboard import measures
         from .polish_ui import CompactFilterLayout
         from .icons import outline_icon
-        self.current_view='home';self.current_anime_id=None;self._set_active_nav('home')
+        if not self._organization_allowed(scope):return
+        restricted=scope=='restricted'
+        self.current_view='restricted_home' if restricted else 'home';self.current_anime_id=None;self._set_active_nav('home')
         page=QWidget();page.setProperty('transientPage',True);outer=QVBoxLayout(page);outer.setContentsMargins(16,12,16,12)
         scroll=QScrollArea();scroll.setWidgetResizable(True);body=QWidget();content=QVBoxLayout(body);content.setContentsMargins(0,0,0,8);content.setSpacing(12)
-        anime,manga,episodes,data=self._dashboard_data()
+        anime,manga,episodes,data=self._dashboard_data(scope)
         continuing=[anime[i] for i,(_,count,watched,resume) in episodes.items() if resume or 0<watched<count]
         continuing.sort(key=lambda e:e.local.get('last_watched_at') or '',reverse=True)
         added=sorted(anime.values(),key=lambda e:(e.local.get('added_at') or '',e.local['id']),reverse=True)
@@ -453,21 +459,21 @@ class HubMixin:
         hero=ArtworkHero((featured.item.get('banner_path') or (paths[0] if paths else None)) if featured else None)
         hero.library_overview=True;hero.setMinimumHeight(190)
         head=QVBoxLayout(hero);head.setContentsMargins(20,16,20,12)
-        eyebrow=QLabel('OVERVIEW');eyebrow.setObjectName('eyebrow');head.addWidget(eyebrow)
-        title=QLabel('Home');title.setObjectName('heroTitle');head.addWidget(title)
-        head.addWidget(QLabel('Your anime & manga library at a glance.'));head.addStretch()
+        eyebrow=QLabel('RESTRICTED ARCHIVE' if restricted else 'OVERVIEW');eyebrow.setObjectName('eyebrow');head.addWidget(eyebrow)
+        title=QLabel('Restricted Overview' if restricted else 'Home');title.setObjectName('heroTitle');head.addWidget(title)
+        head.addWidget(QLabel('Your private anime & manga library.' if restricted else 'Your anime & manga library at a glance.'));head.addStretch()
         head.addWidget(stats_strip(data['summary']+(('Storage',data['storage']),)));content.addWidget(hero)
         actions=CompactFilterLayout(36)
         for label,icon,callback in (
-            ('Continue Watching','circle-play',lambda:self.show_library(state_filter='In Progress')),
-            ('Rescan Library','refresh-cw',self.rescan),('Open Anime','tv',self.show_library),
-            ('Open Manga','book-open',self.show_manga_library),('View Statistics','chart-column',self.show_statistics)):
+            ('Continue Watching','circle-play',lambda:self.show_library(state_filter='In Progress',scope=scope)),
+            ('Rescan Library','refresh-cw',self.rescan),('Open Anime','tv',lambda:self.show_library(scope=scope)),
+            ('Open Manga','book-open',lambda:self.show_manga_library(scope)),('View Statistics','chart-column',lambda:self.show_statistics(scope))):
             button=QPushButton(label);button.setIcon(outline_icon(icon));button.clicked.connect(lambda _,fn=callback:fn())
             if label=='Continue Watching':button.setObjectName('primary')
             actions.addWidget(button)
         content.addLayout(actions)
         self._home_shelf(content,'Continue Watching',continuing,True)
-        self._home_shelf(content,'Recently Added',added,shortcut=lambda:self.show_library(sort_mode='Recently Added'))
+        self._home_shelf(content,'Recently Added',added,shortcut=lambda:self.show_library(sort_mode='Recently Added',scope=scope))
         reading=sorted((e for e in manga if e.local.get('active_item_id')),key=lambda e:e.local.get('last_read') or '',reverse=True)
         if reading:self._home_shelf(content,'Continue Reading',reading,True)
         insights=measures(data,True)
@@ -475,7 +481,7 @@ class HubMixin:
         scores=[n for n in scores if n is not None]
         if scores:insights.layout().addWidget(QLabel(f"Personal ratings · {sum(scores)/len(scores)/2:.2f} average · {len(scores)} rated"))
         content.addWidget(insights);content.addStretch();scroll.setWidget(body);outer.addWidget(scroll);self.replace(page)
-        if featured:self._select_hub_entity('normal',featured.key)
+        if featured and not restricted:self._select_hub_entity(scope,featured.key)
 
     def show_status_hub(self):
         self.show_collections('normal');self.current_view='status_hub';self._set_active_nav('status_hub')

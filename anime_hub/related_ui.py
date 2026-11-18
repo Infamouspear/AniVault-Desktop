@@ -26,7 +26,10 @@ class RelatedMixin:
         if not identifier:status.setText('Match this title to AniList to see related media.');scroll.hide();return panel
         ref=weakref.ref(panel);cache=getattr(self,'_detail_relation_cache',{});self._detail_relation_cache=cache
         inflight=getattr(self,'_detail_relation_inflight',{});self._detail_relation_inflight=inflight
-        def live():return ref() is not None and isValid(ref()) and self._organization_allowed(scope)
+        epoch=getattr(self,'_restricted_epoch',0)
+        def authorized():
+            return self._organization_allowed(scope) and (scope!='restricted' or epoch==getattr(self,'_restricted_epoch',0))
+        def live():return ref() is not None and isValid(ref()) and authorized()
         def render(data):
             if not live():return
             grid.clear_cards();seen=set();entries=[];store=self.organization(scope)
@@ -48,9 +51,10 @@ class RelatedMixin:
                 label.setText(summary);label.setToolTip(summary);card.setProperty('relatedLocal',bool(entity.local));card.setProperty('relationType',edge.get('relationType'))
                 grid.add_card(card)
             scroll.setVisible(bool(seen));scroll.setMinimumHeight(480 if seen else 0);scroll.setMaximumHeight(940)
-            _append_playback_log(f'RelatedLoad scope={scope} media_type={kind} id={identifier} results={len(seen)} cached={key in cache} elapsed_ms={(time.perf_counter()-load_started)*1000:.0f}')
+            _append_playback_log(f'RelatedLoad scope={scope} media_type={kind} id={identifier if scope=='normal' else 'private'} results={len(seen)} cached={key in cache} elapsed_ms={(time.perf_counter()-load_started)*1000:.0f}')
             status.setText('Explicit AniList relationships' if seen else 'No related titles available in this scope.')
         def loaded(data):
+            if not authorized():return
             if not isinstance(data,dict):failed(ValueError('Invalid related-media response'));return
             cache[key]=(time.time(),data)
             for callback,_ in inflight.pop(key,[]):callback(data)
@@ -63,7 +67,8 @@ class RelatedMixin:
             else:status.setText('Related media is temporarily unavailable.')
             retry.show()
         def failed(exc):
-            listeners=inflight.pop(key,[]);_append_playback_log(f'RelatedLoad scope={scope} media_type={kind} id={identifier} exception={type(exc).__name__} message={exc}')
+            if not authorized():return
+            listeners=inflight.pop(key,[]);_append_playback_log(f'RelatedLoad scope={scope} media_type={kind} id={identifier if scope=='normal' else 'private'} exception={type(exc).__name__} message={exc if scope=='normal' else 'private'}')
             for _,callback in listeners:callback(exc)
         def request():
             if not live():return

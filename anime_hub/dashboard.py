@@ -261,7 +261,7 @@ def _rating_entry(window, entity, score):
     return button
 
 
-def analytics(window, data, anime, manga, viewport):
+def analytics(window, data, anime, manga, viewport, scope="normal"):
     from PySide6.QtWidgets import QGridLayout, QPushButton, QSizePolicy
     from .icons import outline_icon
 
@@ -276,6 +276,8 @@ def analytics(window, data, anime, manga, viewport):
         QPushButton[genreLink="true"] {background: transparent; border: 0; padding: 3px; text-align: left}
         QPushButton[genreLink="true"]:hover, QPushButton[genreLink="true"]:focus {color: #ff79a7}
     """)
+    if scope=="restricted":
+        host.setStyleSheet(host.styleSheet().replace("#131927","#201521").replace("#30374d","#553348").replace("#ff5591","#cf6caa"))
     layout = QVBoxLayout(host)
     layout.setContentsMargins(0, 0, 0, 0)
     layout.setSpacing(12)
@@ -351,7 +353,7 @@ def analytics(window, data, anime, manga, viewport):
         line = QHBoxLayout()
         link = QPushButton(genre)
         link.setProperty("genreLink", True)
-        link.clicked.connect(lambda _, name=genre: window.show_library(genre=name))
+        link.clicked.connect(lambda _, name=genre: window.show_library(genre=name,scope=scope))
         link.setFixedWidth(112)
         link.setText(link.fontMetrics().elidedText(genre, Qt.ElideRight, 106))
         link.setToolTip(genre)
@@ -430,7 +432,7 @@ def analytics(window, data, anime, manga, viewport):
         extremes_layout.addWidget(empty)
     extremes_layout.addStretch()
     unrated = QPushButton("Browse Unrated Anime")
-    unrated.clicked.connect(lambda: window.show_library(state_filter="Unrated"))
+    unrated.clicked.connect(lambda: window.show_library(state_filter="Unrated",scope=scope))
     actions.addWidget(unrated)
     actions.addStretch()
     rating_layout.addLayout(actions)

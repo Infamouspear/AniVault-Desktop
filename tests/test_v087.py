@@ -98,16 +98,28 @@ def test_live_search_local_first_dedupe_cache_and_stale_response(window,monkeypa
     popup.changed('Shared');popup.timer.stop();QTest.keyClick(editor,Qt.Key_Escape);assert not popup.isVisible()
 
 
-def test_restricted_hero_is_inside_scroll_and_cached(window,monkeypatch):
-    w,qt,*_=window;calls=[];w.db.set_setting('restricted_unlocked','1')
-    def request(params,success,failure):calls.append(params);success({'items':[remote(i,adult=True) for i in range(50,54)]})
-    monkeypatch.setattr(w,'_request_discover_page',request);w.show_restricted_home();QTest.qWait(60)
-    page=w.stack.currentWidget();scroll=page.findChild(QScrollArea);banner=scroll.widget().findChild(app.BackdropFrame)
+def test_restricted_overview_scroll_and_lock_disposal(window,monkeypatch,tmp_path):
+    w,qt,*_=window
+    calls=[]
+    w.db.set_setting('restricted_unlocked','1')
+    monkeypatch.setattr(w,'_request_discover_page',lambda *args:calls.append(args))
+    for index in range(10):anime(w.db,tmp_path/str(index),800+index,True)
+    w.resize(1000,600)
+    w.show_restricted_home()
+    QTest.qWait(60)
+    page=w.stack.currentWidget()
+    scroll=page.findChild(QScrollArea)
+    banner=scroll.widget().findChild(app.ArtworkHero)
+    assert banner and banner.library_overview
     wait(qt,lambda:scroll.verticalScrollBar().maximum()>0)
-    assert banner and scroll.verticalScrollBar().maximum()>0
-    initial=banner.mapTo(page,app.QPoint(0,0)).y() if hasattr(app,'QPoint') else banner.mapTo(page,banner.rect().topLeft()).y()
-    scroll.verticalScrollBar().setValue(200);QTest.qWait(30);assert banner.mapTo(page,banner.rect().topLeft()).y()<initial
-    w.lock_restricted();w.db.set_setting('restricted_unlocked','1');w.show_restricted_home();assert w.stack.currentWidget() is page and len(calls)==3
+    initial=banner.mapTo(page,banner.rect().topLeft()).y()
+    scroll.verticalScrollBar().setValue(200)
+    QTest.qWait(30)
+    assert banner.mapTo(page,banner.rect().topLeft()).y()<initial
+    w.lock_restricted()
+    w.db.set_setting('restricted_unlocked','1')
+    w.show_restricted_home()
+    assert w.stack.currentWidget() is not page and not calls
 
 
 def test_discover_compact_filter_layout(window,monkeypatch):

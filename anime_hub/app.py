@@ -570,8 +570,19 @@ class ResponsiveLibraryGrid(QWidget):
         self._update_height(); self.updateGeometry()
     def resizeEvent(self,event):
         super().resizeEvent(event); self._reflow()
+    def eventFilter(self,watched,event):
+        if watched is self.parentWidget() and event.type()==QEvent.Resize:
+            self.setFixedWidth(max(1,event.size().width()))
+            self._reflow()
+        return super().eventFilter(watched,event)
     def showEvent(self,event):
-        super().showEvent(event); self._reflow()
+        super().showEvent(event)
+        viewport=self.parentWidget()
+        scroll=viewport.parentWidget() if viewport else None
+        if isinstance(scroll,QScrollArea) and scroll.widget() is self:
+            viewport.installEventFilter(self)
+            self.setFixedWidth(max(1,viewport.width()))
+        self._reflow()
 
 
 class CollectionCard(QFrame):
@@ -723,7 +734,7 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
     personal_rating_changed=Signal()
     manual_status_changed=Signal(str,str,object)
     def __init__(self):
-        super().__init__(); startup_started=time.perf_counter(); self._search_suggestions=[]; self._closing=False;self._shutdown_complete=False; APP_DIR.mkdir(parents=True,exist_ok=True); self.db_path=APP_DIR/"anime_hub.db"; self._new_install=not self.db_path.exists(); prepare_existing_database(self.db_path,_append_playback_log); self.db=Database(self.db_path); record_release(self.db,_append_playback_log)
+        super().__init__(); startup_started=time.perf_counter(); self._search_suggestions=[]; self._closing=False;self._shutdown_complete=False; APP_DIR.mkdir(parents=True,exist_ok=True); self.db_path=APP_DIR/"anime_hub.db"; self._new_install=not self.db_path.exists(); prepare_existing_database(self.db_path,_append_playback_log); self.db=Database(self.db_path); record_release(self.db,_append_playback_log); self.db.set_setting("restricted_unlocked","0")
         self._init_manga_library()
         from .lan_desktop import DesktopServer
         self.lan_server = DesktopServer(self, APP_DIR, _append_playback_log)
@@ -785,7 +796,7 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
             self.show_home();return
         self._stop_local_reader()
         page=LocalMangaReader(self.db,path,APP_DIR/"cache"/"local_reader",scope,self,reader_identity=reader_identity)
-        page.diagnostic.connect(_append_playback_log)
+        page.diagnostic.connect(self._private_diagnostic if scope=="restricted" else _append_playback_log)
         page.back_requested.connect(self._leave_local_reader)
         page.fullscreen_requested.connect(self._toggle_reader_fullscreen)
         self.manga_reader_page=page;self.current_manga_item_id=None
@@ -925,6 +936,25 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         profile.setAccessibleName("Choose local profile image");profile.setObjectName("localProfile")
         profile.clicked.connect(lambda:choose_avatar(self,profile,ASSET_DIR));layout.addWidget(profile)
         avatar(self,profile,ASSET_DIR)
+        self._normal_nav_keys=set(self.nav_buttons)
+        self._normal_sidebar_labels=list(labels)
+        self._restricted_nav_keys=set()
+        destinations=(
+            ("restricted_overview","Restricted Overview",self.show_restricted_home),
+            ("restricted_anime","Anime",lambda:self.show_library(scope="restricted")),
+            ("restricted_manga","Manga",lambda:self.show_manga_library("restricted")),
+            ("restricted_discover","Discover",lambda:self.show_discover(True)),
+            ("restricted_collections","Collections",lambda:self.show_collections("restricted")),
+            ("restricted_statistics","Statistics",lambda:self.show_statistics("restricted")),
+            ("restricted_lock","Lock Archive / Return",self.lock_restricted),
+        )
+        for key,text,action in destinations:
+            button=nav(key,text,action)
+            layout.removeWidget(button)
+            layout.insertWidget(1+len(self._restricted_nav_keys),button)
+            button.hide()
+            self._restricted_nav_keys.add(key)
+        self._sidebar_labels=labels
         names={key:button.text() for key,button in self.nav_buttons.items()}
         for key,button in self.nav_buttons.items():
             button.setToolTip(names[key]);button.setAccessibleName(names[key])
@@ -934,11 +964,12 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
             toggle.setIcon(outline_icon("chevron-right" if collapsed else "chevron-left"))
             layout.setContentsMargins(8 if collapsed else 14,10,8 if collapsed else 14,10)
             for key,button in self.nav_buttons.items():button.setText("" if collapsed else names[key])
-            for label in labels:label.setVisible(not collapsed)
+            for label in labels:label.setVisible(not collapsed and not getattr(self,"_restricted_workspace",False))
             self.rescan_button.setText("" if collapsed else "Rescan Library")
             self.rescan_button.setToolTip("Rescan Library")
             sidebar.style().unpolish(sidebar);sidebar.style().polish(sidebar)
             sidebar._layout_art()
+        self._apply_sidebar_collapse=apply
         apply(self.db.setting("compact_navigation","0")=="1")
         def flip():
             value=not sidebar.property("compact")
@@ -956,6 +987,14 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         key={"saved":"discover","franchises":"collections"}.get(key,key)
         self.active_nav_key=key
         highlight={"watching":"home","recent":"home","status_hub":"collections"}.get(key,key)
+        if self.current_view.startswith("restricted"):
+            view=self.current_view
+            highlight=("restricted_statistics" if view=="restricted_statistics" else
+                       "restricted_collections" if any(part in view for part in ("collection","status","favorite","saved")) else
+                       "restricted_manga" if "manga" in view or "reader" in view else
+                       "restricted_discover" if view in {"restricted_discover","restricted_all","restricted_detail"} else
+                       "restricted_anime" if view in {"restricted_library","restricted_anime_detail","restricted_library_franchise"} else
+                       "restricted_overview")
         for name,button in self.nav_buttons.items():
             button.setProperty("active",name==highlight); button.setIcon(outline_icon(NAV_ICONS.get(name,"bookmark"),name==highlight,self.devicePixelRatioF())); button.style().unpolish(button); button.style().polish(button); button.update()
 
@@ -969,12 +1008,17 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
             popup=reference()
             if popup is not None and isValid(popup):popup.dismiss()
         self._search_suggestions=[r for r in self._search_suggestions if r() is not None and isValid(r())]
+        restricted=self._is_restricted_view()
+        if restricted and not self._organization_allowed("restricted"):
+            return
+        widget.setProperty("restrictedPage",restricted)
+        self._set_workspace_navigation(restricted)
         previous=self.stack.currentWidget()
         if previous is not widget:self._release_manga_page_art(previous)
         returning=self._normal_return_state[0] if self._normal_return_state else None
         if previous is not None and previous is not widget and (previous.property("mangaPage") or previous.property('transientPage')) and previous is not returning:
             self.stack.removeWidget(previous);previous.deleteLater()
-        self._apply_theme(self.current_view.startswith("restricted")); self.stack.addWidget(widget); self.stack.setCurrentWidget(widget);self._prepare_hub_page()
+        self._apply_theme(restricted); self.stack.addWidget(widget); self.stack.setCurrentWidget(widget);self._prepare_hub_page()
         route=self._route_snapshot()
         if route is not None and self.current_view!="player":
             if not self._history_navigating and self._current_route is not None and route!=self._current_route:
@@ -1009,14 +1053,63 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         popup=QApplication.activePopupWidget()
         if popup:popup.close()
         self.current_source_item=None
+        self._restricted_epoch=getattr(self,"_restricted_epoch",0)+1
         self.db.set_setting("restricted_unlocked","0");self.restricted_label.hide();self.restricted_button.hide()
+        self._cancel_hub_hover()
+        self._unpin_hub_selection()
+        self._hub_focus_group=None
+        self.context_rail.clear()
+        self.global_suggestions.dismiss()
+        self.global_suggestions.results=[]
+        self.global_suggestions.clear()
+        self.global_search.clear()
+        self.current_remote_item=None
+        self.current_discover_state=None
+        self.current_manga_id=None
+        self.current_manga_item_id=None
+        self.current_library_franchise=None
+        self.current_collection_id=None
+        self._library_franchise_cache={}
+        self._relation_cache.clear()
+        for cache_name in ("_detail_relation_cache","_detail_relation_inflight"):
+            cache=getattr(self,cache_name,{})
+            for key in list(cache):
+                if key[0]=="restricted":cache.pop(key,None)
+        self.current_search=("", "normal")
+        self._dashboard_cache=None
+        self._organization_cache={}
+        self.__dict__.get("_restricted_artwork_cache",{}).clear()
+        self.__dict__.get("_restricted_artwork_waiters",{}).clear()
+        self._remote_artwork_cache.clear()
+        self._remote_artwork_waiters.clear()
+        _ARTWORK_PIXMAP_CACHE.clear()
+        self._discover_cache.clear()
+        self._discover_inflight.clear()
+        self._discover_pending.clear()
+        self._recommendation_profile_cache.clear()
+        self._discover_filter_cache.pop(True,None)
+        self._discover_filter_waiters[True]=[]
+        self._discover_filter_loading[True]=False
+        self._section_page_cache.clear()
+        self._status_card_refs={key:refs for key,refs in self._status_card_refs.items() if key[0]!="restricted"}
+        self._status_count_refs={key:refs for key,refs in self._status_count_refs.items() if key[0]!="restricted"}
+        for key in list(self._library_page_cache):
+            if key[0]=="restricted":self._library_page_cache.pop(key)
+        for index in reversed(range(self.stack.count())):
+            private=self.stack.widget(index)
+            if private.property("restrictedPage"):
+                self.stack.removeWidget(private)
+                private.deleteLater()
         self._back_history.clear();self._forward_history.clear()
+        self._current_route=None
         saved=self._normal_return_state;self._normal_return_state=None
-        if saved and saved[3] and (saved[1] in {"manga_library","manga_detail"} or self._manga_scope_dirty):
-            self._manga_scope_dirty=False;self._dispatch_route(saved[3])
-        elif saved and saved[0] is not None and isValid(saved[0]):
-            widget,view,nav,route=saved;self.current_view=view;self._set_active_nav(nav);self._current_route=route;self.replace(widget)
-        else:self.show_home()
+        self._library_cache_dirty=True
+        self._manga_scope_dirty=False
+        self.show_home()
+        if saved and saved[3] and saved[3][0]!="home":
+            self._dispatch_route(saved[3])
+        self.context_rail.clear()
+        self._update_hub_rail_visibility()
         _append_playback_log(f"RestrictedLock state=locked elapsed_ms={(time.perf_counter()-started)*1000:.0f}")
         self.statusBar().showMessage("Restricted Archive locked. Its data remains safely stored.",5000)
 
@@ -1032,7 +1125,7 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         if self.current_view in {"local_reader","restricted_local_reader"} and self.manga_reader_page:
             return ("local_reader",self.manga_reader_page.path,self.manga_reader_page.scope)
         if self.current_view=="restricted_source_detail" and self.current_source_item:return ("restricted_source_detail",dict(self.current_source_item))
-        if self.current_view=="library": return ("library",dict(self.library_context))
+        if self.current_view in {"library","restricted_library"}: return ("library",dict(self.library_context))
         if self.current_view in {"detail","restricted_anime_detail"}: return ("detail",self.current_anime_id)
         if self.current_view in {"collection_detail","restricted_collection_detail"}: return ("collection_detail",self.current_collection_id,self.current_collection_scope)
         if self.current_view in {"status_list","restricted_status_list"}:return ("status_list",self.current_status_name,self.current_collection_scope)
@@ -1040,7 +1133,7 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         if self.current_view in {"airing_detail","restricted_detail"} and self.current_remote_item: return ("remote",self.current_remote_item,self.current_remote_source)
         if self.current_view=="discover_all" and self.current_discover_state: return ("discover_all",dict(self.current_discover_state))
         if self.current_view=="restricted_all" and self.current_discover_state:return ("restricted_all",dict(self.current_discover_state))
-        if self.current_view in {"home","settings","airing","collections","franchises","saved","downloads"}: return (self.current_view,)
+        if self.current_view in {"statistics","restricted_statistics","home","settings","airing","collections","franchises","saved","downloads"}: return (self.current_view,)
         if self.current_view=="discover":return ("normal_discover",getattr(self,"discovery_media_type","ANIME"))
         if self.current_view=="restricted_discover":return (self.current_view,self.restricted_media_type)
         if self.current_view in {"restricted_home","restricted_saved","restricted_collections"}:return (self.current_view,)
@@ -1050,7 +1143,8 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         kind=route[0]
         actions={"statistics":self.show_statistics,"requests":self.show_requests,"status_hub":self.show_status_hub,"home":self.show_home,"settings":self.show_settings,"airing":self.show_airing,"downloads":self.show_downloads,
                  "collections":self.show_collections,"franchises":self.show_franchises,"discover":self.show_discover,"saved":self.show_saved}
-        if kind=='library_franchise':self.show_library_franchise(route[1],route[2])
+        if kind=="restricted_statistics":self.show_statistics("restricted")
+        elif kind=='library_franchise':self.show_library_franchise(route[1],route[2])
         elif kind=="global_search":self.show_global_search(route[1],route[2])
         elif kind=="favorites":self.show_favorites(route[1])
         elif kind=="manga_library":self.show_manga_library(**route[1])
@@ -1116,6 +1210,9 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
                 or row["parsed_search_title"] or row["title"] or row["source_folder_name"] or "Unknown Anime")
 
     def _collection_log(self,event,collection=None,anime=None,result="success"):
+        if (collection and collection["scope"]=="restricted") or (anime and self.db.anime_scope(anime)=="restricted"):
+            _append_playback_log(f"Restricted collection event result={result}")
+            return
         _append_playback_log(f"{event}\ncollection id: {collection['id'] if collection else 'n/a'}\ncollection name: {collection['name'] if collection else 'n/a'}\nanime local id: {anime['id'] if anime else 'n/a'}\nAniList id: {anime['anilist_id'] if anime and anime['anilist_id'] else 'n/a'}\nanime title: {self._display_title(anime) if anime else 'n/a'}\nresult: {result}")
 
     def _attach_collection_menu(self,card,anime_id,collection_id=None,franchise_id=None,scope="normal"):
@@ -1309,6 +1406,14 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         header=QHBoxLayout(); title=QLabel("Restricted Collections" if restricted else "Collections"); title.setObjectName("title"); header.addWidget(title); header.addStretch()
         if not restricted:
             franchises=QPushButton('Franchise Groups');franchises.clicked.connect(self.show_franchises);header.addWidget(franchises)
+        if restricted:
+            favorites=QPushButton("Favorites")
+            favorites.clicked.connect(lambda:self.show_favorites(scope))
+            header.addWidget(favorites)
+            if self.db.source_saved():
+                bookmarks=QPushButton("External Bookmarks")
+                bookmarks.clicked.connect(lambda:self.show_saved("restricted"))
+                header.addWidget(bookmarks)
         create=QPushButton("+ New Collection"); create.setObjectName("primary"); create.clicked.connect(lambda:self.create_collection(scope=scope)); header.addWidget(create); outer.addLayout(header)
         controls=QHBoxLayout(); controls.addStretch(); sort=QComboBox(); sort.addItems(["Recently Created","Name","Recently Updated"]); controls.addWidget(QLabel("Sort:")); controls.addWidget(sort); outer.addLayout(controls)
         scroll=QScrollArea(); scroll.setWidgetResizable(True); body=QWidget();body_layout=QVBoxLayout(body);status_heading=QLabel("Status Lists");status_heading.setObjectName("section");body_layout.addWidget(status_heading);status_grid=ResponsiveLibraryGrid(card_width=270);body_layout.addWidget(status_grid);custom_heading=QLabel("Custom Collections");custom_heading.setObjectName("section");body_layout.addWidget(custom_heading);grid=ResponsiveLibraryGrid(card_width=270);body_layout.addWidget(grid);body_layout.addStretch();scroll.setWidget(body); outer.addWidget(scroll); selected={"id":None,"card":None}
@@ -1493,10 +1598,16 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
     def _request_discover_page(self,params,on_success,on_failure):
         requested=time.perf_counter();raw=dict(params);context=raw.pop("_context","Discover")
         normalized={key:(list(value) if isinstance(value,tuple) else value) for key,value in raw.items()}; key=json.dumps(normalized,sort_keys=True,separators=(",",":"))
+        private=bool(normalized.get("is_adult"))
+        epoch=getattr(self,"_restricted_epoch",0)
+        def authorized():
+            return not private or (self._organization_allowed("restricted") and epoch==getattr(self,"_restricted_epoch",0))
+        if not authorized():return
         _append_playback_log(f"{context}\npage requested={normalized.get('page',1)} media_type={normalized.get('media_type','ANIME')} adult={normalized.get('is_adult')} sort={normalized.get('sort')} country={normalized.get('country')} formats={normalized.get('formats')}\ncache lookup start")
         if key in self._discover_cache:
             _append_playback_log(f"{context}\nCache: HIT\nCache lookup end={(time.perf_counter()-requested)*1000:.1f} ms")
-            QTimer.singleShot(0,lambda:on_success(self._discover_cache[key])); return
+            result=self._discover_cache[key]
+            QTimer.singleShot(0,lambda:on_success(result) if authorized() else None); return
         _append_playback_log(f"{context}\nCache: MISS\nCache lookup end={(time.perf_counter()-requested)*1000:.1f} ms")
         if key in self._discover_inflight: self._discover_inflight[key].append((on_success,on_failure)); return
         if self._discover_cooldown_until and time.time()>=self._discover_cooldown_until:self._discover_cooldown_until=0.0
@@ -1507,29 +1618,34 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         self._discover_inflight[key]=[(on_success,on_failure)]
         _append_playback_log(f"{context}\nrequest dispatched={(time.perf_counter()-requested)*1000:.1f} ms")
         def succeeded(result):
+            if not authorized():return
             if self.db.observe_classifications(result.get('items') or []):self._library_cache_dirty=True
             _append_playback_log(f"{context}\nHTTP response received status={result.get('httpStatus','unknown')} raw_count={result.get('rawCount',len(result.get('items') or []))}\nresponse parse complete={(time.perf_counter()-requested)*1000:.1f} ms")
             self._discover_cache[key]=result; listeners=self._discover_inflight.pop(key,[])
             for callback,_ in listeners:callback(result)
         def failed(exc):
+            if not authorized():return
             listeners=self._discover_inflight.pop(key,[])
             if isinstance(exc,AniListHTTPError) and exc.status_code==429:
                 delay=max(1,int(exc.retry_after or 15)); self._discover_cooldown_until=max(self._discover_cooldown_until,time.time()+delay)
                 pending=self._discover_pending.setdefault(key,[])
                 for callback,error in listeners:pending.append((normalized,callback,error,context))
                 if not self._discover_cooldown_timer.isActive():self._discover_cooldown_timer.start(delay*1000)
-                _append_playback_log(f"Discover global cooldown seconds={delay} key={key}")
+                _append_playback_log(f"Discover global cooldown seconds={delay} key={'restricted' if private else key}")
             else:
                 for _,error in listeners:error(exc)
         self._submit_discover_job("page:"+key,lambda:fetch_discover_page(**normalized),succeeded,failed)
 
     def _request_discover_filters(self,callback,restricted=False):
+        epoch=getattr(self,"_restricted_epoch",0)
+        if restricted and not self._organization_allowed("restricted"):return
         key=bool(restricted); cached=self._discover_filter_cache.get(key)
-        if cached is not None:QTimer.singleShot(0,lambda:callback(cached));return
+        if cached is not None:QTimer.singleShot(0,lambda:callback(cached) if not restricted or (self._organization_allowed("restricted") and epoch==getattr(self,"_restricted_epoch",0)) else None);return
         self._discover_filter_waiters[key].append(callback)
         if self._discover_filter_loading[key]:return
         self._discover_filter_loading[key]=True
         def loaded(options):
+            if restricted and (not self._organization_allowed("restricted") or epoch!=getattr(self,"_restricted_epoch",0)):return
             self._discover_filter_cache[key]=options;self._discover_filter_loading[key]=False;waiters=self._discover_filter_waiters[key];self._discover_filter_waiters[key]=[]
             for waiter in waiters:waiter(options)
         def failed(_):self._discover_filter_loading[key]=False;self._discover_filter_waiters[key]=[]
@@ -1551,13 +1667,23 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
 
     def _load_remote_artwork(self,url,label,width,height):
         if self._closing:return
-        cached=self._remote_artwork_cache.get((url,width,height))
+        epoch=getattr(self,"_restricted_epoch",0)
+        private=self.current_view.startswith("restricted")
+        cache=self.__dict__.setdefault("_restricted_artwork_cache",{}) if private else self._remote_artwork_cache
+        waiters=self.__dict__.setdefault("_restricted_artwork_waiters",{}) if private else self._remote_artwork_waiters
+        cached=cache.get((url,width,height))
         if cached is not None: label.setPixmap(cached); return
-        self._remote_artwork_waiters.setdefault((url,width,height),[]).append(weakref.ref(label))
-        if len(self._remote_artwork_waiters[(url,width,height)])>1: return
+        waiters.setdefault((url,width,height),[]).append(weakref.ref(label))
+        if len(waiters[(url,width,height)])>1: return
         request=QNetworkRequest(QUrl(url));request.setAttribute(QNetworkRequest.CacheLoadControlAttribute,QNetworkRequest.PreferCache);request.setTransferTimeout(15000)
+        if private:
+            request.setAttribute(QNetworkRequest.CacheLoadControlAttribute,QNetworkRequest.AlwaysNetwork)
+            request.setAttribute(QNetworkRequest.CacheSaveControlAttribute,False)
         reply=self._network.get(request)
         def finished():
+            if private and (not self._organization_allowed("restricted") or epoch!=getattr(self,"_restricted_epoch",0)):
+                reply.deleteLater()
+                return
             buffer=QBuffer()
             buffer.setData(reply.readAll())
             buffer.open(QBuffer.OpenModeFlag.ReadOnly)
@@ -1571,8 +1697,8 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
             scaled=QPixmap.fromImage(image)
             key=(url,width,height)
             if not scaled.isNull():
-                self._remote_artwork_cache[key]=scaled;_bound_pixmap_cache(self._remote_artwork_cache)
-            for reference in self._remote_artwork_waiters.pop(key,[]):
+                cache[key]=scaled;_bound_pixmap_cache(cache)
+            for reference in waiters.pop(key,[]):
                 target=reference()
                 if target is not None and not scaled.isNull():
                     try: target.setPixmap(scaled)
@@ -1590,7 +1716,7 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         if local_row and not is_manga:
             if self.db.anime_scope(local_row)!=scope:local_row=None
         manual=(local_row["manual_status"] or self.db.manual_status(scope,anilist_id=item["id"])) if is_manga and local_row else self.db.manual_status(scope,anime_id=local_row["id"]) if local_row else self.db.manual_status(scope,anilist_id=item["id"])
-        card=SeasonCard(item,bool(local_row),self._load_remote_artwork,False,False,manual,compact=scope=="normal");card.saved_scope=scope
+        card=SeasonCard(item,bool(local_row),self._load_remote_artwork,False,False,manual,compact=True);card.saved_scope=scope
         if scope=='normal' and not is_manga and not local_row and item.get('isAdult') is False:
             from .requests_ui import request_button
             button=request_button(self,item)
@@ -1608,15 +1734,31 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         card.customContextMenuRequested.connect(lambda pos:self.manga_menu(card,pos,local_row["id"]) if is_manga and local_row else self.anime_collection_menu(card,pos,local_row["id"],scope=scope) if local_row else self.remote_anime_menu(card,pos,item,scope))
         return card
 
+    def _is_restricted_view(self):
+        return self.current_view.startswith("restricted") or (
+            self.current_view=="player" and self.current_anime_id is not None
+            and self.db.anime_scope(self.current_anime_id)=="restricted")
+
+    @staticmethod
+    def _private_diagnostic(message):
+        _append_playback_log("Restricted activity: diagnostic details omitted")
+
+    def _set_workspace_navigation(self,restricted):
+        self._restricted_workspace=restricted
+        for key in self._normal_nav_keys:
+            self.nav_buttons[key].setVisible(not restricted)
+        self.restricted_button.setVisible(not restricted and self._organization_allowed("restricted"))
+        self.restricted_label.setVisible(False)
+        for key in self._restricted_nav_keys:
+            self.nav_buttons[key].setVisible(restricted)
+        for label in self._normal_sidebar_labels:
+            label.setVisible(not restricted and not self.sidebar.property("compact"))
+        self.rescan_button.setVisible(not restricted)
+        self._apply_sidebar_collapse(bool(self.sidebar.property("compact")))
+
     def _restricted_nav(self,outer):
-        row=QHBoxLayout(); home=QPushButton("Restricted Home"); anime=QPushButton("Anime");manga=QPushButton("Manga");collections=QPushButton("Collections");lock=QPushButton("Lock Archive")
-        home.clicked.connect(self.show_restricted_home);anime.clicked.connect(lambda:self.show_discover(True,"ANIME"));manga.clicked.connect(lambda:self.show_discover(True,"MANGA"));collections.clicked.connect(lambda:self.show_collections("restricted"));lock.clicked.connect(self.lock_restricted)
-        local=QPushButton("Local Manga");local.clicked.connect(lambda:self.show_manga_library("restricted"))
-        favorites=QPushButton('Favorites');favorites.clicked.connect(lambda:self.show_favorites('restricted'))
-        for button in (home,anime,manga,local,favorites,collections):row.addWidget(button)
-        if self.db.source_saved():
-            bookmarks=QPushButton("External Bookmarks");bookmarks.clicked.connect(lambda:self.show_saved("restricted"));row.addWidget(bookmarks)
-        row.addStretch();row.addWidget(lock);outer.addLayout(row)
+        # Contextual navigation is owned by the persistent sidebar.
+        pass
 
     def _source_card(self,item):
         item=bookmark_record(item)
@@ -1793,27 +1935,12 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         if restricted:self._restricted_saved_render=render
 
     def show_restricted_home(self):
-        started=time.perf_counter()
-        if self.db.setting("restricted_unlocked","0")!="1":self.unlock_restricted();return
+        if not self._organization_allowed("restricted"):
+            self.unlock_restricted()
+            return
         if not self.current_view.startswith("restricted") and hasattr(self,"stack"):
             self._normal_return_state=(self.stack.currentWidget(),self.current_view,self.active_nav_key,self._current_route)
-        self.current_view="restricted_home";self.current_anime_id=None;self._set_active_nav("restricted")
-        cached=self._section_page_cache.get("restricted_home")
-        if cached is not None and isValid(cached):
-            self.replace(cached);_append_playback_log(f"RestrictedEnter reused=true elapsed_ms={(time.perf_counter()-started)*1000:.0f}");return
-        page=QWidget();outer=QVBoxLayout(page);outer.setContentsMargins(22,18,22,18);self._restricted_nav(outer)
-        banner=BackdropFrame(str(ART_PACKS["restricted"]["hero"]));banner.setMinimumHeight(300);banner.setMaximumHeight(320);banner.focal=(.9,.32);banner.safe_banner=True;banner.setProperty('brandIllustration',True);banner.safe_focal=True;hero=QVBoxLayout(banner);hero.setContentsMargins(30,24,30,24);hero.addStretch();eyebrow=QLabel("RESTRICTED ARCHIVE");eyebrow.setObjectName("eyebrow");hero.addWidget(eyebrow);title=QLabel("The private wing of AniVault");title.setObjectName("heroTitle");title.setWordWrap(True);title.setMaximumWidth(540);hero.addWidget(title);copy=QLabel("Adult-only AniList discovery. Every title shown here is explicitly marked adult by AniList.");copy.setWordWrap(True);copy.setMaximumWidth(500);hero.addWidget(copy);actions=QHBoxLayout();browse=QPushButton("Browse Restricted Discover");browse.setObjectName("primary");browse.clicked.connect(lambda:self.show_discover(True));actions.addWidget(browse);collections=QPushButton("Collections");collections.clicked.connect(lambda:self.show_collections("restricted"));actions.addWidget(collections);actions.addStretch();hero.addLayout(actions)
-        scroll=QScrollArea();scroll.setWidgetResizable(True);body=QWidget();content=QVBoxLayout(body);content.setContentsMargins(0,8,0,18);content.setSpacing(22);content.addWidget(banner);status=QLabel("Opening the restricted catalogue…");status.setObjectName("muted");content.addWidget(status);content.addStretch();scroll.setWidget(body);outer.addWidget(scroll);self._section_page_cache["restricted_home"]=page;self.replace(page)
-        local={int(row["anilist_id"]):row for row in self.db.anime_list() if row["anilist_id"]};specs={"Trending":DISCOVER_SPECS["Trending"],"Popular":DISCOVER_SPECS["Popular"],"Top Rated":DISCOVER_SPECS["Top Rated"]};headings=list(specs)
-        def render_section(heading,items):
-            if self.current_view!="restricted_home" or self.stack.currentWidget() is not page:return
-            label=QLabel(heading);label.setObjectName("section");content.insertWidget(content.count()-1,label);cards=[self._make_discover_card(item,local,"Restricted",scope="restricted") for item in items if item.get("isAdult") is True];view_all=ViewAllCard(heading);view_all.clicked.connect(lambda h=heading,s={**specs[heading],"restricted":True}:self.show_discover_all(h,s));cards.append(view_all);grid=ResponsiveSeasonGrid(cards,context=f"Restricted {heading}");content.insertWidget(content.count()-1,grid);QTimer.singleShot(0,lambda g=grid:g.set_viewport_width(max(228,scroll.viewport().width()-8),"restricted-initial"))
-        def load(index=0):
-            if self.current_view!="restricted_home" or self.stack.currentWidget() is not page:return
-            if index>=len(headings):status.setText("Restricted Archive ready");return
-            heading=headings[index];self._request_discover_page({"page":1,"is_adult":True,**specs[heading]},lambda result,h=heading,i=index:(render_section(h,result.get("items") or []),load(i+1)),lambda _exc:status.setText("Restricted discovery is temporarily unavailable. Your local vault is unaffected."))
-        load()
-        _append_playback_log(f"RestrictedEnter reused=false elapsed_ms={(time.perf_counter()-started)*1000:.0f}")
+        self.show_home("restricted")
 
     def show_discover(self,restricted=False,media_type="ANIME"):
         if restricted and self.db.setting("restricted_unlocked","0")!="1":return
@@ -2008,14 +2135,15 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         scroll.verticalScrollBar().valueChanged.connect(lambda value:load_more() if value>=scroll.verticalScrollBar().maximum()-max(240,scroll.verticalScrollBar().pageStep()//2) else None)
         restart()
 
-    def show_library(self,checked=False,category_filter=None,state_filter=None,sort_mode=None,search_text="",view_mode=None,genre=None):
+    def show_library(self,checked=False,category_filter=None,state_filter=None,sort_mode=None,search_text="",view_mode=None,genre=None,scope="normal"):
+        if not self._organization_allowed(scope):return
         stamp=self.db.change_stamp()
         if getattr(self,'_library_data_stamp',None)!=stamp:
             self._library_cache_dirty=True;self._library_data_stamp=stamp
         navigation_started=time.perf_counter(); requested="Favorites" if state_filter=="Favorites" else ("Watching" if state_filter=="In Progress" else category_filter or "All Anime")
         _append_playback_log(f"Navigation requested: {requested}")
-        self.current_view="library"; self.current_anime_id=None
-        self.library_context={"category_filter":category_filter,"state_filter":state_filter,"sort_mode":sort_mode,"search_text":search_text}
+        self.current_view="restricted_library" if scope=="restricted" else "library"; self.current_anime_id=None
+        self.library_context={"scope":scope,"category_filter":category_filter,"state_filter":state_filter,"sort_mode":sort_mode,"search_text":search_text}
         key=("favorites" if state_filter=="Favorites" else "watching" if state_filter=="In Progress" or category_filter=="Watching" else
              "unwatched" if state_filter=="Unwatched" else
              "completed" if state_filter=="Completed" else "recent" if sort_mode=="Recently Added" else "all")
@@ -2023,7 +2151,7 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         self._load_library_relations()
         view_mode=view_mode or self.db.setting('library_view_mode','Franchises')
         self.library_context['view_mode']=view_mode
-        page_key=(category_filter,state_filter,sort_mode,search_text,view_mode,genre,self._library_relation_revision)
+        page_key=(scope,category_filter,state_filter,sort_mode,search_text,view_mode,genre,self._library_relation_revision)
         cached=self._library_page_cache.get(page_key)
         if cached and isValid(cached[0]) and cached[1]==stamp and not self._library_cache_dirty:
             self.replace(cached[0]);resume=getattr(cached[0],'resume_population',None)
@@ -2034,7 +2162,7 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         overview=ArtworkHero();overview.library_overview=True;overview.setFixedHeight(174 if key=="all" else 98)
         overview_layout=QVBoxLayout(overview);overview_layout.setContentsMargins(18,10,18,12)
         overview_layout.addStretch()
-        eyebrow=QLabel("YOUR LIBRARY");eyebrow.setObjectName("eyebrow");overview_layout.addWidget(eyebrow)
+        eyebrow=QLabel("RESTRICTED ARCHIVE" if scope=="restricted" else "YOUR LIBRARY");eyebrow.setObjectName("eyebrow");overview_layout.addWidget(eyebrow)
         title=QLabel(requested); title.setObjectName("title");overview_layout.addWidget(title)
         subtitle=QLabel("Browse and manage your anime collection");subtitle.setObjectName("muted");overview_layout.addWidget(subtitle);outer.addWidget(overview)
         controls=CompactFilterLayout(38); search=QLineEdit(search_text); search.setPlaceholderText("Search your library…"); decorate_search(search);search.setMinimumWidth(170);controls.addWidget(search)
@@ -2045,7 +2173,7 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         if state_filter and state.findText(state_filter)>=0: state.setCurrentText(state_filter)
         if sort_mode and sort.findText(sort_mode)>=0: sort.setCurrentText(sort_mode)
         view=QComboBox();view.setObjectName('libraryViewMode');view.addItems(['Franchises','Individual Titles']);view.setCurrentText(view_mode);view.setToolTip('Library view mode');controls.addWidget(view);view.setVisible(key=='all')
-        refresh_links=QPushButton('Relationships');refresh_links.setIcon(outline_icon('refresh-cw'));refresh_links.setToolTip('Refresh explicit AniList anime relationships');refresh_links.setVisible(key=='all');refresh_links.clicked.connect(lambda:self._request_library_relations(True));controls.addWidget(refresh_links)
+        refresh_links=QPushButton('Relationships');refresh_links.setIcon(outline_icon('refresh-cw'));refresh_links.setToolTip('Refresh explicit AniList anime relationships');refresh_links.setVisible(key=='all' and scope=='normal');refresh_links.clicked.connect(lambda:self._request_library_relations(True));controls.addWidget(refresh_links)
         scroll=QScrollArea(); scroll.setWidgetResizable(True); grid=ResponsiveLibraryGrid(card_width=POSTER_CARD_WIDTH)
         db_started=time.perf_counter()
         cache_state="cached/reused"
@@ -2057,12 +2185,12 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
 
         def project(source):
             scopes = self.db.anime_scope_map(source)
-            normal = [row for row in source if scopes[row["id"]] == "normal"]
+            normal = [row for row in source if scopes[row["id"]] == scope]
             catalog = {row["id"]: library_metadata(row) for row in normal}
             titles = {row["id"]: self._display_title(row, catalog[row["id"]]).casefold()
                       for row in normal}
             statuses = dict(self.db.connection.execute(
-                "SELECT entity_key,status FROM manual_status WHERE scope='normal'"))
+                "SELECT entity_key,status FROM manual_status WHERE scope=?", (scope,)))
             return normal, catalog, titles, statuses
 
         normal_rows, catalog, titles, status_map = project(rows)
@@ -2121,7 +2249,7 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         search_delay.setInterval(90)
         def rebuild():
             nonlocal rows, normal_rows, catalog, titles, status_map, projection_stamp
-            if self._closing or self.stack.currentWidget() is not page:
+            if self._closing or self.stack.currentWidget() is not page or not self._organization_allowed(scope):
                 return
             search_delay.stop()
             current_stamp = self.db.change_stamp()
@@ -2153,7 +2281,7 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
             elif key=="Year": visible.sort(key=lambda r:(catalog[r['id']].get("seasonYear") or r["detected_year"] or 0),reverse=True)
             else: visible.sort(key=lambda r:titles[r["id"]])
             if view.currentText()=='Franchises' and self.active_nav_key=='all':
-                groups=build_franchises(visible,self._library_relation_data);membership={row['id']:group for group in groups for row in group.rows};emitted=set();presentations=[]
+                groups=build_franchises(visible,self._library_relation_data,scope);membership={row['id']:group for group in groups for row in group.rows};emitted=set();presentations=[]
                 for row in visible:
                     group=membership.get(row['id'])
                     if group:
@@ -2164,13 +2292,13 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
                 visible=presentations
             timing={"prepare":time.perf_counter()-prepared_started,"widgets":0.0,"artwork":0.0,"first":None}
             def add_batch(start=0):
-                if self._closing or not isValid(grid) or self.stack.currentWidget() is not page or generation["value"]!=active_generation or len(grid.cards)!=start: return
+                if self._closing or not self._organization_allowed(scope) or not isValid(grid) or self.stack.currentWidget() is not page or generation["value"]!=active_generation or len(grid.cards)!=start: return
                 batch_started=time.perf_counter(); batch_end=min(start+10,len(visible)); batch=[]
                 for i in range(start,batch_end):
                     row=visible[i]; card_started=time.perf_counter()
                     if isinstance(row,dict) and row.get('_franchise'):card=self._franchise_card(row['_franchise'])
                     else:
-                        card=Card(row,show_progress=(row["watched_count"] or 0)>0,timings=timing,manual_status=status_map.get(row_key(row)));self._register_status_card(card,"normal",row_key(row));card.clicked.connect(self.show_detail);self._attach_collection_menu(card,row["id"])
+                        card=Card(row,show_progress=(row["watched_count"] or 0)>0,timings=timing,manual_status=status_map.get(row_key(row)));self._register_status_card(card,scope,row_key(row));card.clicked.connect(self.show_detail);self._attach_collection_menu(card,row["id"],scope=scope)
                     batch.append(card)
                     timing["widgets"]+=time.perf_counter()-card_started
                 grid.add_cards(batch);page.resume_population=(lambda:add_batch(batch_end)) if batch_end<len(visible) else None
@@ -2195,7 +2323,7 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
             self.library_context['view_mode']=view.currentText();self.db.set_setting('library_view_mode',view.currentText());rebuild()
         view.currentTextChanged.connect(view_changed)
         scroll.setWidget(grid); outer.addWidget(scroll); self.replace(page); QTimer.singleShot(0,rebuild)
-        if key=='all' and view.currentText()=='Franchises':self._request_library_relations()
+        if scope=='normal' and key=='all' and view.currentText()=='Franchises':self._request_library_relations()
 
     def show_airing(self):
         navigation_started=time.perf_counter(); season,year=current_anime_season(); label=season_label(season,year)
@@ -2967,7 +3095,7 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
                               hover_previews=self.db.setting("hover_previews","1")=="1",parent=self)
         page.back_requested.connect(self._leave_player); page.watched_threshold.connect(self._automatic_watched); page.episode_requested.connect(self._player_adjacent)
         page.fullscreen_requested.connect(self._toggle_player_fullscreen); page.playback_ended.connect(self._integrated_ended); page.playback_error.connect(self._integrated_error)
-        page.diagnostic.connect(_append_playback_log); page.external.clicked.connect(self._player_external)
+        page.diagnostic.connect(self._private_diagnostic if anime is not None and self.db.anime_scope(anime)=="restricted" else _append_playback_log); page.external.clicked.connect(self._player_external)
         self.player_page=page; self.current_view="player"; self.current_anime_id=anime_id; self.replace(page)
         page.load(path,media_id,anime_id,title,episode_title,resume_ms,previous is not None,following is not None)
 
@@ -2983,12 +3111,12 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
             subprocess.Popen([vlc,path]); return
         try: process,port=launch_vlc_session(vlc,path)
         except Exception as exc:
-            _append_playback_log(f"Episode launch failed\nMedia path: {path}\n{exc}")
+            (self._private_diagnostic if self.db.anime_scope(anime_id)=="restricted" else _append_playback_log)(f"Episode launch failed\nMedia path: {path}\n{exc}")
             AniVaultDialog.alert(self,"VLC Launch Failed",str(exc)); return
         monitor=PlaybackMonitor(process,port,path,media_id,anime_id)
         monitor.watched.connect(self._automatic_watched)
         monitor.playback_status.connect(self.statusBar().showMessage)
-        monitor.diagnostic.connect(_append_playback_log)
+        monitor.diagnostic.connect(self._private_diagnostic if self.db.anime_scope(anime_id)=="restricted" else _append_playback_log)
         monitor.finished.connect(lambda m=monitor:self._playback_finished(m))
         self.playback_monitors.append(monitor); monitor.start()
 
@@ -3058,7 +3186,7 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         self.db.set_resume_position(media_id,0)
 
     def _integrated_error(self,path,details):
-        _append_playback_log(f"Playback error\nMedia path: {path}\n{details}")
+        (self._private_diagnostic if self._is_restricted_view() else _append_playback_log)(f"Playback error\nMedia path: {path}\n{details}")
         message=details if "architecture is incompatible" in details else f"AniVault couldn't play this file internally.\n\n{details}"
         choice=AniVaultDialog.choose(self,"Playback Error",message,(("Open in VLC","external"),("Close","close")))
         if choice=="external": self._player_external()
@@ -3083,16 +3211,18 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         token=self.db.setting("anilist_access_token"); anime=self.db.anime(anime_id)
         if not token or not anime or anime["anilist_id"] is None: return
         watched,total=self.db.anime_progress(anime_id); metadata=json.loads(anime["metadata_json"] or "{}"); previous=int(metadata.get("anilist_user_progress") or 0)
+        private=self.db.anime_scope(anime)=="restricted"
+        diagnostic=self._private_diagnostic if private else _append_playback_log
         if watched<previous and not allow_decrease:
-            _append_playback_log(f"AniList mutation\nTitle: {self._display_title(anime)}\nAniList ID: {anime['anilist_id']}\nPrevious progress: {previous}\nNew progress: {watched}\nTrigger: {trigger}\nResult: skipped — automatic actions may not lower AniList progress")
+            diagnostic(f"AniList mutation\nTitle: {self._display_title(anime)}\nAniList ID: {anime['anilist_id']}\nPrevious progress: {previous}\nNew progress: {watched}\nTrigger: {trigger}\nResult: skipped — automatic actions may not lower AniList progress")
             return
         def sync():
             try:
                 result=update_progress(token,anime["anilist_id"],watched,total>0 and watched>=total)
                 remote=int(result.get("progress",watched) or 0)
                 if not self._closing:self.anilist_progress_updated.emit(anime_id,remote,result.get("status") or "")
-                _append_playback_log(f"AniList mutation\nTitle: {self._display_title(anime)}\nAniList ID: {anime['anilist_id']}\nPrevious progress: {previous}\nNew progress: {watched}\nTrigger: {trigger}\nResult: succeeded (remote progress {remote})")
-            except Exception as exc: _append_playback_log(f"AniList mutation\nTitle: {self._display_title(anime)}\nAniList ID: {anime['anilist_id']}\nPrevious progress: {previous}\nNew progress: {watched}\nTrigger: {trigger}\nResult: failed — local state preserved\n{exc}")
+                diagnostic(f"AniList mutation\nTitle: {self._display_title(anime)}\nAniList ID: {anime['anilist_id']}\nPrevious progress: {previous}\nNew progress: {watched}\nTrigger: {trigger}\nResult: succeeded (remote progress {remote})")
+            except Exception as exc: diagnostic(f"AniList mutation\nTitle: {self._display_title(anime)}\nAniList ID: {anime['anilist_id']}\nPrevious progress: {previous}\nNew progress: {watched}\nTrigger: {trigger}\nResult: failed — local state preserved\n{exc}")
         threading.Thread(target=sync,name="AniVaultAniListProgress",daemon=True).start()
 
     def _playback_finished(self,monitor):

@@ -108,14 +108,14 @@ def test_unknown_source_and_sparse_legacy_json_render(window):
     view.show_source_detail(sparse);assert view.current_view=='restricted_source_detail'
 
 
-def test_cached_artwork_and_home_reuse_without_source_requests(window,tmp_path,monkeypatch):
+def test_cached_artwork_and_fresh_overview_without_source_requests(window,tmp_path,monkeypatch):
     view,qt=window;image=tmp_path/'stored.png';pix=QPixmap(30,40);pix.fill(QColor('coral'));pix.save(str(image))
     item=entry();item['cover_path']=str(image);view.db.save_source_gallery(item)
     fetched=[];monkeypatch.setattr(view._network,'get',lambda *a:fetched.append(a))
     view.show_saved('restricted');qt.processEvents()
     assert cards(view)[0].findChildren(app_module.QLabel)[0].pixmap() is not None
     view.show_restricted_home();first=view.stack.currentWidget();view.show_home();view.show_restricted_home()
-    assert view.stack.currentWidget() is first and not fetched
+    assert view.stack.currentWidget() is not first and view.current_view=="restricted_home" and not fetched
 
 
 def test_url_validation_and_identity():

@@ -9,6 +9,7 @@ from anime_hub.database import Database
 from anime_hub.organization import Organization
 from anime_hub.manga_library import MangaStore
 from anime_hub.app import Card,SeasonCard,CollectionCard,BackdropFrame,StatusCountLabel,ResponsiveLibraryGrid
+from anime_hub.hub_ui import ArtworkHero
 from anime_hub.polish_ui import CoverListCard,DetailBackdrop
 from anime_hub.media_cards import ContainedScrollArea
 from test_cross_media import data,window,remote,anime,manga
@@ -57,7 +58,7 @@ def test_restricted_live_ui_has_planning_and_only_external_bookmarks(window,monk
     assert w.db.is_source_saved('nhentai','7')
     monkeypatch.setattr(w,'_request_discover_page',lambda *_:None);w.show_restricted_home();qt.processEvents()
     assert not any(button.text() in {'Saved','Restricted Saved'} for button in w.stack.currentWidget().findChildren(QPushButton))
-    banner=next(frame for frame in w.stack.currentWidget().findChildren(BackdropFrame));assert banner.safe_focal
+    banner=next(frame for frame in w.stack.currentWidget().findChildren(ArtworkHero));assert banner.library_overview
     outer=w.stack.currentWidget().findChild(QScrollArea);assert banner.isAncestorOf(banner.findChild(QLabel)) and outer.widget().isAncestorOf(banner)
     w.lock_restricted();assert not w.current_view.startswith('restricted') and w.db.is_source_saved('nhentai','7')
 
