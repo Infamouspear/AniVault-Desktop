@@ -115,7 +115,9 @@ def test_unlock_sidebar_and_private_artwork_session(window, monkeypatch):
     requests = []
     monkeypatch.setattr(w._network, "get", lambda request: (requests.append(request), reply)[1])
     target = QLabel()
-    LOAD_ARTWORK(w, "https://example.invalid/private.png", target, 172, 258)
+    # A hidden private page may finish rendering after normal navigation.
+    w.show_home()
+    LOAD_ARTWORK(w, "https://example.invalid/private.png", target, 172, 258, "restricted")
     assert not w._remote_artwork_waiters
     assert len(w._restricted_artwork_waiters) == 1
     assert requests[0].attribute(QNetworkRequest.CacheSaveControlAttribute) is False

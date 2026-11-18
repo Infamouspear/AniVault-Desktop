@@ -1665,10 +1665,11 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         # scopes. Genuine external bookmarks keep their separate source API.
         self._set_status('Planning' if value else None,scope,item=clean_item)
 
-    def _load_remote_artwork(self,url,label,width,height):
+    def _load_remote_artwork(self,url,label,width,height,scope=None):
         if self._closing:return
         epoch=getattr(self,"_restricted_epoch",0)
-        private=self.current_view.startswith("restricted")
+        private=(scope=="restricted") if scope is not None else self._is_restricted_view()
+        if private and not self._organization_allowed("restricted"):return
         cache=self.__dict__.setdefault("_restricted_artwork_cache",{}) if private else self._remote_artwork_cache
         waiters=self.__dict__.setdefault("_restricted_artwork_waiters",{}) if private else self._remote_artwork_waiters
         cached=cache.get((url,width,height))
@@ -1716,7 +1717,7 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         if local_row and not is_manga:
             if self.db.anime_scope(local_row)!=scope:local_row=None
         manual=(local_row["manual_status"] or self.db.manual_status(scope,anilist_id=item["id"])) if is_manga and local_row else self.db.manual_status(scope,anime_id=local_row["id"]) if local_row else self.db.manual_status(scope,anilist_id=item["id"])
-        card=SeasonCard(item,bool(local_row),self._load_remote_artwork,False,False,manual,compact=True);card.saved_scope=scope
+        card=SeasonCard(item,bool(local_row),lambda url,label,width,height:self._load_remote_artwork(url,label,width,height,scope),False,False,manual,compact=True);card.saved_scope=scope
         if scope=='normal' and not is_manga and not local_row and item.get('isAdult') is False:
             from .requests_ui import request_button
             button=request_button(self,item)

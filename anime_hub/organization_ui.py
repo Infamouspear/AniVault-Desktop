@@ -67,7 +67,7 @@ class OrganizationMixin:
                 card.customContextMenuRequested.disconnect()
                 card.customContextMenuRequested.connect(lambda pos,c=card:self._source_menu(c,pos,entity.item,collection_id))
         else:
-            card=SeasonCard(entity.item,False,self._load_remote_artwork,False,False,entity.status)
+            card=SeasonCard(entity.item,False,lambda url,label,width,height:self._load_remote_artwork(url,label,width,height,entity.scope),False,False,entity.status)
             card.saved_scope=entity.scope
             card.clicked.connect(lambda _:self.show_remote_anilist(entity.item,'Restricted' if entity.scope=='restricted' else 'Saved'))
             card.save_toggled.connect(lambda _,value:self.set_saved(entity.item,value,entity.scope))
