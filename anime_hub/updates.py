@@ -118,24 +118,59 @@ def launch_installer_after_exit(path, expected):
 
     if sys.platform != "win32" or not getattr(sys, "frozen", False):
         raise ValueError("In-app installation requires the installed Windows build")
+    import uuid
+    log_dir = Path(os.environ["LOCALAPPDATA"]) / "AnimeHub" / "update_logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / ("update-" + uuid.uuid4().hex + ".log")
     script = r"""
 $ErrorActionPreference = 'Stop'
 $restart = $false
+$installLog = $env:ANIVAULT_UPDATE_LOG
+$helperLog = [IO.Path]::ChangeExtension($installLog, 'helper.log')
+function Invoke-AniVaultInstaller {
+    $stream = [IO.File]::OpenRead($env:ANIVAULT_UPDATE_FILE)
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    try {
+        $hash = [BitConverter]::ToString($algorithm.ComputeHash($stream)).Replace('-', '')
+    } finally {
+        $stream.Dispose()
+        $algorithm.Dispose()
+    }
+    if ($hash -ne $env:ANIVAULT_UPDATE_HASH) { throw 'Installer checksum changed.' }
+    Start-Process -FilePath $env:ANIVAULT_UPDATE_FILE -ArgumentList @(
+        '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CLOSEAPPLICATIONS',
+        '/NOFORCECLOSEAPPLICATIONS','/NORESTARTAPPLICATIONS',
+        ('/LOG="' + $installLog + '"'),('/DIR="' + $dir + '"')) -WindowStyle Hidden -Wait -PassThru
+}
 try {
     $old = Get-Process -Id ([int]$env:ANIVAULT_UPDATE_PID) -ErrorAction SilentlyContinue
     if ($null -ne $old -and -not $old.WaitForExit(120000)) { throw 'AniVault did not close in time.' }
     $restart = $true
-    if ((Get-FileHash -LiteralPath $env:ANIVAULT_UPDATE_FILE -Algorithm SHA256).Hash -ne $env:ANIVAULT_UPDATE_HASH) {
-        throw 'Installer checksum changed.'
-    }
     $dir = Split-Path -Parent $env:ANIVAULT_UPDATE_APP
-    $setup = Start-Process -FilePath $env:ANIVAULT_UPDATE_FILE -ArgumentList @(
-        '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS','/NORESTARTAPPLICATIONS',
-        ('/DIR="' + $dir + '"')) -Wait -PassThru
+    $setup = Invoke-AniVaultInstaller
+    if ($setup.ExitCode -eq 5) {
+        # A closed window can leave a worker process holding the installed DLLs.
+        # Recover only old, windowless processes from this exact installation.
+        $name = [IO.Path]::GetFileNameWithoutExtension($env:ANIVAULT_UPDATE_APP)
+        $leftovers = @(Get-Process -Name $name -ErrorAction SilentlyContinue | Where-Object {
+            [string]::Equals($_.Path, $env:ANIVAULT_UPDATE_APP, [StringComparison]::OrdinalIgnoreCase) -and
+            $_.MainWindowHandle -eq 0 -and $_.StartTime -lt (Get-Date).AddMinutes(-2)
+        })
+        if ($leftovers.Count -gt 0) {
+            foreach ($leftover in $leftovers) {
+                Stop-Process -Id $leftover.Id -Force -ErrorAction Stop
+                if (-not $leftover.WaitForExit(10000)) { throw 'A leftover AniVault process could not exit.' }
+            }
+            $installLog = [IO.Path]::ChangeExtension($installLog, 'retry.log')
+            $setup = Invoke-AniVaultInstaller
+        }
+    }
     if ($setup.ExitCode -ne 0) { throw ('Installer exit code: ' + $setup.ExitCode) }
 } catch {
+    $message = $_.Exception.Message + [Environment]::NewLine + 'Installer log: ' + $installLog
+    $message | Set-Content -LiteralPath $helperLog -Encoding UTF8
     Add-Type -AssemblyName System.Windows.Forms
-    [void][Windows.Forms.MessageBox]::Show($_.Exception.Message,'AniVault update failed')
+    [void][Windows.Forms.MessageBox]::Show($message,'AniVault update failed')
 } finally {
     Remove-Item -LiteralPath $env:ANIVAULT_UPDATE_FILE -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath (Split-Path -Parent $env:ANIVAULT_UPDATE_FILE) -ErrorAction SilentlyContinue
@@ -148,7 +183,10 @@ try {
     encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
     env = dict(os.environ, ANIVAULT_UPDATE_PID=str(os.getpid()),
                ANIVAULT_UPDATE_APP=sys.executable, ANIVAULT_UPDATE_FILE=str(path),
-               ANIVAULT_UPDATE_HASH=expected)
+               ANIVAULT_UPDATE_HASH=expected, ANIVAULT_UPDATE_LOG=str(log_path))
+    # Windows PowerShell must resolve its own modules even when the app was
+    # launched from PowerShell 7, which has a different module search path.
+    env.pop("PSModulePath", None)
     powershell = Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"
     subprocess.Popen([str(powershell), "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
                      env=env, creationflags=subprocess.CREATE_NO_WINDOW)

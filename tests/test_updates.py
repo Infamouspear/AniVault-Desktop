@@ -68,3 +68,86 @@ def test_download_verifies_bytes_and_cleans_up(monkeypatch, tmp_path, release, c
         assert not folder.exists()
     else:
         assert updates.download_installer(args).read_bytes() == payload
+
+@pytest.mark.skipif(__import__("sys").platform != "win32", reason="Windows update handoff")
+def test_update_recovers_only_old_hidden_matching_instances(monkeypatch, tmp_path):
+    import base64
+    import hashlib
+    import subprocess
+    import sys
+
+    installed = tmp_path / "installed" / "AniVault.exe"
+    installed.parent.mkdir()
+    installed.write_bytes(b"fixture app")
+    installer = tmp_path / "download" / "setup.exe"
+    installer.parent.mkdir()
+    installer.write_bytes(b"fixture installer")
+    calls = []
+    with monkeypatch.context() as patch:
+        patch.setattr(sys, "frozen", True, raising=False)
+        patch.setattr(sys, "executable", str(installed))
+        patch.setenv("LOCALAPPDATA", str(tmp_path / "appdata"))
+        patch.setattr(subprocess, "Popen", lambda args, **kwargs: calls.append((args, kwargs)))
+        updates.launch_installer_after_exit(installer, hashlib.sha256(installer.read_bytes()).hexdigest())
+    args, options = calls[0]
+    original = base64.b64decode(args[-1]).decode("utf-16le")
+    original = original.replace(
+        "Add-Type -AssemblyName System.Windows.Forms",
+        "throw $message",
+    )
+    # Exercise the real PowerShell control flow with process/installer fixtures.
+    # No real application is closed or executed by this test.
+    fixture = r"""
+$script:attempts = 0
+$script:stopped = @()
+$script:restarted = $false
+function Get-Process {
+    [CmdletBinding()]
+    param([int]$Id, [string]$Name)
+    if ($PSBoundParameters.ContainsKey('Id')) { return }
+    $old = [pscustomobject]@{
+        Id=12345; Path=$env:ANIVAULT_UPDATE_APP; MainWindowHandle=0;
+        StartTime=(Get-Date).AddHours(-3)
+    }
+    $old | Add-Member -MemberType ScriptMethod -Name WaitForExit -Value { param($timeout) return $true }
+    $old
+    [pscustomobject]@{
+        Id=12346; Path=$env:ANIVAULT_UPDATE_APP; MainWindowHandle=1;
+        StartTime=(Get-Date).AddHours(-3)
+    }
+    [pscustomobject]@{
+        Id=12347; Path='C:\another-install\AniVault.exe'; MainWindowHandle=0;
+        StartTime=(Get-Date).AddHours(-3)
+    }
+}
+function Stop-Process {
+    [CmdletBinding()]
+    param([int]$Id, [switch]$Force)
+    $script:stopped += $Id
+}
+function Start-Process {
+    [CmdletBinding()]
+    param([string]$FilePath, [string[]]$ArgumentList, [string]$WindowStyle,
+          [string]$WorkingDirectory, [switch]$Wait, [switch]$PassThru)
+    if ($FilePath -eq $env:ANIVAULT_UPDATE_FILE) {
+        $script:attempts++
+        if (-not ($ArgumentList -contains '/CLOSEAPPLICATIONS')) { throw 'Graceful close missing' }
+        if (-not ($ArgumentList | Where-Object { $_ -like '/LOG=*' })) { throw 'Log missing' }
+        [pscustomobject]@{ExitCode= $(if ($script:attempts -eq 1) {5} else {0})}
+    } else {
+        $script:restarted = $FilePath -eq $env:ANIVAULT_UPDATE_APP -and $env:PYINSTALLER_RESET_ENVIRONMENT -eq '1'
+    }
+}
+"""
+    assertions = r"""
+if ($script:attempts -ne 2) {throw 'Expected one recovery retry'}
+if ($script:stopped.Count -ne 1 -or $script:stopped[0] -ne 12345) {throw 'Unsafe process selection'}
+if (-not $script:restarted) {throw 'Application was not restarted'}
+"""
+    script = base64.b64encode((fixture + original + assertions).encode("utf-16le")).decode("ascii")
+    result = subprocess.run(
+        [args[0], "-NoProfile", "-NonInteractive", "-EncodedCommand", script],
+        env=options["env"], capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not installer.exists()
