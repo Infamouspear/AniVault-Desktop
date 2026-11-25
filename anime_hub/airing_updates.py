@@ -231,11 +231,10 @@ def fetch_airing_updates(identifiers, now, request=None, after=None):
             if not (payload.get('pageInfo') or {}).get('hasNextPage'):
                 break
             # Keep notification traffic below 30 requests/minute; never sleep UI.
-            time.sleep(2.1)
+            # Shared transport controls request spacing.
         else:
             raise RuntimeError('Airing schedule page limit reached')
-        if start+20 < len(identifiers):
-            time.sleep(2.1)
+        # Shared transport controls batch spacing.
     return results
 
 
@@ -250,7 +249,7 @@ def fetch_vault_airing(identifiers, now, after=None, request=None):
         payload=request(query,{'ids':list(identifiers[start:start+20])}).get('Page')
         if not isinstance(payload,dict) or not isinstance(payload.get('media'),list):raise RuntimeError('Incomplete airing catalog')
         catalog.extend(payload['media'])
-        if start+20<len(identifiers):time.sleep(2.1)
+        # Shared transport paces every consumer and coalesces identical catalog calls.
     airing=[i['id'] for i in catalog if i.get('type')=='ANIME' and i.get('isAdult') is False and i.get('status')=='RELEASING']
     schedules=fetch_airing_updates(airing,now,request,after) if airing else []
     return {'catalog':catalog,'schedules':schedules}

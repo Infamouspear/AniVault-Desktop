@@ -20,3 +20,16 @@ def gui_application():
         assert QFontDatabase.addApplicationFont(str(font_path)) >= 0
         application.setFont(QFont("Segoe UI", 9))
     yield application
+
+
+@pytest.fixture(autouse=True)
+def isolated_anilist_transport(tmp_path_factory,monkeypatch):
+    from anime_hub import anilist_transport as transport
+    cache_root=tmp_path_factory.mktemp('anilist-transport')
+    pinned=transport.Scheduler(cache_root/'cache',default_limit=10000,min_interval=0)
+    original=transport.configure
+    monkeypatch.setattr(transport,'configure',lambda directory,scheduler=None:original(directory,scheduler or pinned))
+    import sys
+    if 'anime_hub.app' in sys.modules:monkeypatch.setattr(sys.modules['anime_hub.app'],'configure_anilist',transport.configure)
+    transport.configure(cache_root/'root')
+    yield pinned

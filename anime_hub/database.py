@@ -111,6 +111,8 @@ class Database:
         self._migrate()
         from .scan_state import migrate as migrate_scan
         migrate_scan(self)
+        from .metadata_jobs import migrate as migrate_metadata
+        migrate_metadata(self)
         self.connection.executescript("CREATE INDEX IF NOT EXISTS manual_status_list ON manual_status(scope,status,updated_at DESC); CREATE INDEX IF NOT EXISTS collection_entries_added ON collection_entries(collection_id,added_at DESC);")
 
     def _migrate(self):

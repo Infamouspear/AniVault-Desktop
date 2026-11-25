@@ -99,13 +99,13 @@ def _write_diagnostics(path: Path | None, diagnostics: list[str], child_log: lis
     if path:
         path.parent.mkdir(parents=True, exist_ok=True)
         # Logs are safe to share; detailed local provenance lives in scoped Scanner Review.
-        allowed=('AniVault scanner diagnostics','Episode count:','Extras count:','Confidence:','Rate limited:','Retry count:','Selected AniList ID:','Scan cancelled','Metadata scan paused','Metadata queue paused')
+        allowed=('AniVault scanner diagnostics','Episode count:','Extras count:','Confidence:','Rate limited:','Retry count:','Selected AniList ID:','Scan cancelled','Metadata scan paused','Metadata queue paused','AniList Metadata Matching:','AniList request diagnostics:')
         path.write_text("\n".join(line for line in diagnostics if line.startswith(allowed)),encoding='utf-8')
 
 
 
 def scan(root: Path, db, progress=lambda *_: None, diagnostics_path: Path | None = None,
-         metadata_status=lambda _message: None, should_cancel=lambda: False):
+         metadata_status=lambda _message: None, should_cancel=lambda: False, *, match_online=True):
     child_log: list[str] = []
     if not root.is_dir():
         metadata_status('Library root is unavailable. Existing records and progress were retained.')
@@ -202,57 +202,22 @@ def scan(root: Path, db, progress=lambda *_: None, diagnostics_path: Path | None
     db.finish_scan()
     for anime_id,level,details,parsed,mixed in pending_states:
         if mixed:mixed_ids.add(anime_id)
-        state.record(db,anime_id,state=level,report=details,part=parsed.part,format_hint=parsed.format_hint,commit=False)
+        previous=state.source_state(db,anime_id)
+        preserved=state.safe_json(previous['report'])
+        state.record(db,anime_id,state=level if not preserved.get('candidates') else previous['state'],report=preserved if preserved.get('query')==parsed.title else details,part=parsed.part,format_hint=parsed.format_hint,commit=False)
 
     db.connection.commit()
-    unresolved = [row for row in db.anime_list() if row['id'] in touched and row['id'] not in mixed_ids and not row["anilist_id"] and not state.source_state(db,row['id'])['locked']]
-    client = AniListClient(status_callback=metadata_status, should_cancel=should_cancel)
-    client.query_cache={}
-    total = len(unresolved)
-    for position, row in enumerate(unresolved, 1):
-        if should_cancel():
-            diagnostics.append(f"Metadata scan paused after {position - 1} / {total}; completed matches were saved.")
-            break
-        metadata_status(f"Fetching metadata… {position} / {total}")
-        report = lookup_anilist(row["parsed_search_title"] or row["title"],
-                                row["detected_season"], row["detected_year"], client,
-                                tuple(value for value in (row["alt_title"],) if value),
-                                row["episode_count"],state.source_state(db,row['id'])['format_hint'],state.source_state(db,row['id'])['part'])
-        scope='restricted' if (report.selected or {}).get('isAdult') is True else db.anime_scope(row,fresh=False)
-        if scope=='restricted':
-            # Never persist a private candidate list or its identity in a normal diagnostic log.
-            report.candidates=[v for v in report.candidates if v.get('isAdult') is True]
-        else:
-            report.candidates=[v for v in report.candidates if v.get('isAdult') is not True]
-        if report.selected:
-            selected = report.selected
-            try:
-                selected = cache_artwork(selected, db.path.parent/'cache'/('restricted_artwork' if selected.get('isAdult') is True else 'artwork'))
-            except Exception as exc:
-                report.api_error = (report.api_error + f" Artwork cache error: {exc}").strip()
-            db.set_metadata(row["id"], selected["id"], selected)
-            report.selected=selected
-        state.record(db,row['id'],state=report.confidence_level if not report.selected else 'High Confidence',report=state.report_data(report),method='automatic',part=state.source_state(db,row['id'])['part'],format_hint=state.source_state(db,row['id'])['format_hint'],artwork_state='Available' if report.selected and report.selected.get('cover_path') else 'Retry artwork' if report.selected else 'Awaiting identification')
-        final_title = ((report.selected or {}).get("title") or {}).get("english") or \
-                      ((report.selected or {}).get("title") or {}).get("romaji") or \
-                      ("Pending / Rate Limited" if report.rate_limited else "Unmatched")
-        diagnostics.extend([f"Metadata lookup for: {row['root_path']}",
-                            f"AniList match: {final_title}", *(['Confidence: Private source'] if scope=='restricted' else report.diagnostic_lines()), ""])
-        _write_diagnostics(diagnostics_path, diagnostics, child_log)
-        if report.rate_limited and not report.selected:
-            diagnostics.append("Metadata queue paused after repeated rate limiting; unresolved titles remain pending.")
-            break
-    # File-level suggestions are stored with provenance; a human confirms mixed releases.
-    for anime_id in mixed_ids:
-        if should_cancel():break
-        row=db.anime(anime_id)
-        if db.anime_scope(row,fresh=False)=='restricted':continue
-        for file in db.connection.execute('SELECT f.* FROM scan_file_matches f JOIN media m ON f.media_id=m.id WHERE m.anime_id=? AND f.locked=0 AND f.anilist_id IS NULL',(anime_id,)).fetchall():
-            if should_cancel():break
-            report=lookup_anilist(file['parsed_title'],None,None,client,(),None,file['format_hint'])
-            report.candidates=[v for v in report.candidates if v.get('isAdult') is False]
-            # Suggestions from a shared folder never rewrite its inherited legacy link.
-            with db.connection:db.connection.execute('UPDATE scan_file_matches SET state=?,report=? WHERE media_id=?',('Needs Review' if report.candidates else 'Unmatched',json.dumps(state.report_data(report)),file['media_id']))
-            if report.api_error:break
+    from . import metadata_jobs as jobs
+    from .anilist_transport import configure
+    scheduler=configure(db.path.parent)
+    jobs.enqueue_existing(db,set(touched))
+    metadata_status(f'Local Library Scan completed: {len(roots)} roots indexed. '+jobs.progress_text(db))
+    if match_online:
+        jobs.process(db,lookup=lookup_anilist,scheduler=scheduler,should_cancel=should_cancel,status=metadata_status,max_jobs=100000,include_artwork=False)
+        # Standalone callers retain identification compatibility; desktop indexing
+        # uses match_online=False and a separate persistent metadata worker.
+    for row in db.anime_list():
+        if row['id'] in touched and row['anilist_id'] and db.anime_scope(row,fresh=False)=='normal':diagnostics.append(f"Selected AniList ID: {row['anilist_id']}")
+    diagnostics.extend(['AniList Metadata Matching: '+json.dumps(jobs.summary(db)), 'AniList request diagnostics: '+json.dumps(scheduler.snapshot('normal'))])
     _write_diagnostics(diagnostics_path, diagnostics, child_log)
     return len(roots)

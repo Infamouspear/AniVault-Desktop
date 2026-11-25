@@ -36,30 +36,15 @@ def next_anime_season(season: str, year: int) -> tuple[str, int]:
 
 def graphql(query: str, variables: dict | None = None, token: str = "", timeout: int = 20,
             include_http_status: bool = False):
-    headers = {"Content-Type": "application/json", "Accept": "application/json", "User-Agent": USER_AGENT}
-    if token:
-        headers["Authorization"] = f"Bearer {token.strip()}"
-    request = urllib.request.Request(
-        ENDPOINT,
-        data=json.dumps({"query": query, "variables": variables or {}}).encode("utf-8"),
-        headers=headers,
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            payload = json.load(response); http_status=int(getattr(response,"status",200) or 200)
-    except urllib.error.HTTPError as exc:
-        details = exc.read().decode("utf-8", "replace")[:500]
-        retry_header=exc.headers.get("Retry-After") if exc.headers else None
-        try: retry_after=max(1,int(float(retry_header))) if retry_header is not None else None
-        except (TypeError,ValueError): retry_after=None
-        raise AniListHTTPError(exc.code,details,retry_after) from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"AniList connection failed: {exc.reason}") from exc
-    if payload.get("errors"):
-        message = "; ".join(str(item.get("message", "AniList error")) for item in payload["errors"])
-        raise RuntimeError(message)
-    data=payload.get("data") or {}
-    return (data,http_status) if include_http_status else data
+    from .anilist_transport import get_scheduler,Deferred
+    try:response=get_scheduler().request(query,variables,token=token,origin=None,wait=True,max_retries=0,timeout=timeout)
+    except Deferred as exc:
+        if exc.status:
+            import time
+            raise AniListHTTPError(exc.status,exc.kind,max(1,int(exc.retry_at-time.time()+.99)) if exc.retry_at else None) from exc
+        raise RuntimeError('AniList '+exc.kind.replace('_',' ')) from exc
+    data=response.payload.get('data') or {}
+    return (data,response.status) if include_http_status else data
 
 
 def validate_token(token: str) -> dict:
@@ -102,7 +87,12 @@ def fetch_anime_relations(media_ids) -> list[dict]:
     allowed={"PREQUEL","SEQUEL","SIDE_STORY","PARENT","SPIN_OFF","ALTERNATIVE","OTHER"}
     # One aliased GraphQL request prevents a franchise with many children from
     # becoming a burst of identical HTTP requests (and avoids needless 429s).
-    selected=ids[:20]
+    from .anilist_transport import get_scheduler,_context
+    scheduler=get_scheduler();context=_context.get();scope=context.get('scope','normal')
+    cached={}
+    if not context.get('force'):
+        cached={identifier:value for identifier in ids[:20] if (value:=scheduler.semantic('relations',identifier,scope)) is not None}
+    selected=[identifier for identifier in ids[:20] if identifier not in cached]
     fields="relations { edges { relationType node { id type isAdult format episodes title { romaji english native } coverImage { extraLarge large } } } }"
     query="query { %s }" % " ".join(f"m{index}: Media(id:{source_id},type:ANIME) {{ {fields} }}" for index,source_id in enumerate(selected))
     payload=graphql(query,{"id":selected[0]}) if selected else {}
@@ -113,6 +103,9 @@ def fetch_anime_relations(media_ids) -> list[dict]:
         raise RuntimeError('AniList returned incomplete relationship data; cached groups were retained.')
     for index,source_id in enumerate(selected):
         media=payload.get(f"m{index}") or {}
+        scheduler.semantic('relations',source_id,scope,value=media,ttl=7*86400)
+    for source_id in ids[:20]:
+        media=cached.get(source_id) if source_id in cached else payload.get(f'm{selected.index(source_id)}') or {}
         for edge in ((media.get("relations") or {}).get("edges") or []):
             node=edge.get("node") or {}; relation=edge.get("relationType")
             if node.get("type")!="ANIME" or relation not in allowed or not node.get("id"): continue

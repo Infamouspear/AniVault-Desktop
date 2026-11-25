@@ -187,7 +187,10 @@ class LibraryFranchiseMixin:
             self._relationship_notice('Could not refresh relationships. Existing groups are kept. Try again later.')
             if isinstance(exc,AniListHTTPError) and exc.status_code==429:self._discover_cooldown_until=max(self._discover_cooldown_until,time.time()+int(exc.retry_after or 15))
             _append_playback_log(f'LibraryRelations failure={type(exc).__name__} fallback=individual_titles')
-        self._submit_discover_job('library-relations:'+str(batch),lambda:fetch_anime_relations(batch),loaded,failed)
+        def fetch():
+            from .anilist_transport import request_context
+            with request_context(origin='relationships',force=force):return fetch_anime_relations(batch)
+        self._submit_discover_job('library-relations:'+str(batch),fetch,loaded,failed)
 
     def _franchise_card(self,group):
         from .polish_ui import CoverListCard

@@ -89,7 +89,7 @@ def record(db,anime_id,*,state,report=None,warnings=(),part=None,format_hint=Non
 def report_data(report):
     return {'query':report.search_title,'level':getattr(report,'confidence_level','Unmatched'),
             'reason':report.failure_reason or next((d['reason'] for d in getattr(report,'decisions',[]) if report.selected and d['id']==report.selected['id']),''),'candidates':report.candidates,'decisions':[d for d in getattr(report,'decisions',[]) if d.get('id') in {c.get('id') for c in report.candidates}],
-            'selected_id':report.selected.get('id') if report.selected and report.selected.get('id') in {c.get('id') for c in report.candidates} else None,'network_error':bool(report.api_error),'rate_limited':report.rate_limited}
+            'selected_id':report.selected.get('id') if report.selected and report.selected.get('id') in {c.get('id') for c in report.candidates} else None,'network_error':bool(report.api_error),'failure_kind':getattr(report,'failure_kind',''),'next_retry':getattr(report,'next_retry',0),'requests':getattr(report,'requests',0),'cache_hits':getattr(report,'cache_hits',0),'rate_limited':report.rate_limited}
 
 
 def merge_art(old,new):
@@ -131,6 +131,8 @@ def manual_match(db,anime_id,item=None,media_id=None,scope='normal',clear=False)
             db.connection.execute('UPDATE manual_status SET metadata_json=? WHERE scope=? AND entity_key=?',(json.dumps(value),scope,local_key))
             db.connection.execute('UPDATE collection_entries SET metadata_json=? WHERE entity_key=?',(json.dumps(value),local_key))
             db.connection.execute("INSERT INTO scan_sources(anime_id,state,method,locked) VALUES(?,?,?,?) ON CONFLICT(anime_id) DO UPDATE SET state=excluded.state,method=excluded.method,locked=excluded.locked",(anime_id,'Manual' if item else 'Unmatched','automatic' if clear else 'manual',int(not clear)))
+        target=('media:'+str(media_id)) if media_id is not None else 'anime:'+str(anime_id)
+        db.connection.execute("UPDATE metadata_jobs SET state=?,outcome=?,next_at=0,revision=revision+1,owner=NULL,lease_until=0 WHERE scope=? AND target=? AND operation='identify'",('pending' if clear else 'completed','manual_cleared' if clear else 'manual',scope,target))
 
 
 def file_title(path,parent_title):

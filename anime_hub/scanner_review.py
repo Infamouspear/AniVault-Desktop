@@ -16,7 +16,9 @@ def sanitized_report(db,scope='normal'):
         # Deliberate allowlist: no title, filename, description, URL, path, token or raw server error.
         report=row['report'];source=state.source_state(db,row['anime_id'])
         result.append({'record':row['anime_id'],'file_record':row['media_id'],'season':row['season'],'indexed_count':row['count'],'anilist_id':row['anilist_id'],'state':row['state'],'method':source['method'],'locked':bool(row['locked']),'candidate_ids':[c.get('id') for c in report.get('candidates',[]) if c.get('isAdult') is False],'network_error':bool(report.get('network_error'))})
-    return {'scanner_report_version':1,'sources':result}
+    from .metadata_jobs import summary
+    from .anilist_transport import get_scheduler
+    return {'scanner_report_version':2,'sources':result,'metadata_queue':summary(db),'anilist_requests':get_scheduler().snapshot('normal')}
 
 
 class ScannerReview(QDialog):
@@ -28,6 +30,11 @@ class ScannerReview(QDialog):
         top=QHBoxLayout();self.filter=QComboBox();self.filter.addItems(['Needs attention','All sources']);top.addWidget(self.filter)
         audit=QPushButton('Reevaluate existing links');audit.clicked.connect(self.audit);top.addWidget(audit)
         export=QPushButton('Export sanitized report');export.setVisible(scope=='normal');export.clicked.connect(self.export);top.addWidget(export);top.addStretch();layout.addLayout(top)
+        queue_row=QHBoxLayout();self.queue_status=QLabel();self.queue_status.setWordWrap(True);queue_row.addWidget(self.queue_status,1)
+        pause=QPushButton('Pause metadata');pause.clicked.connect(window.pause_metadata_jobs);queue_row.addWidget(pause)
+        resume=QPushButton('Resume metadata');resume.clicked.connect(lambda:window.resume_metadata_jobs(manual=True));queue_row.addWidget(resume);layout.addLayout(queue_row)
+        from PySide6.QtCore import QTimer
+        self.queue_timer=QTimer(self);self.queue_timer.setInterval(1500);self.queue_timer.timeout.connect(self.refresh_queue_status);self.queue_timer.start();self.refresh_queue_status()
         columns=QHBoxLayout();self.sources=QListWidget();self.sources.setMinimumWidth(310);columns.addWidget(self.sources,2)
         right=QVBoxLayout();self.details=QTextEdit();self.details.setReadOnly(True);right.addWidget(self.details,2)
         search=QHBoxLayout();self.query=QLineEdit();self.query.setPlaceholderText('Search AniList manually…');search.addWidget(self.query);self.search_button=QPushButton('Search / Retry');self.search_button.clicked.connect(self.search);self.query.returnPressed.connect(self.search);search.addWidget(self.search_button);right.addLayout(search)
@@ -40,6 +47,14 @@ class ScannerReview(QDialog):
         self.sources.currentRowChanged.connect(self.select);self.filter.currentIndexChanged.connect(self.reload)
         self.reload(anime_id=anime_id)
 
+    def refresh_queue_status(self):
+        from .metadata_jobs import progress_text
+        self.queue_status.setText('Local Library Scan: '+getattr(self.window,'local_scan_status','Not running')+'\n'+progress_text(self.window.db))
+        if self.target:
+            target=('media:'+str(self.target['media_id'])) if self.target['media_id'] else 'anime:'+str(self.target['anime_id'])
+            jobs=self.window.db.connection.execute('SELECT operation,state,outcome FROM metadata_jobs WHERE scope=? AND target=?',(self.scope,target)).fetchall()
+            if jobs:self.queue_status.setText(self.queue_status.text()+'\nSelected source: '+' · '.join(r['operation']+' '+r['state']+(' ('+r['outcome'].replace('_',' ')+')' if r['outcome'] else '') for r in jobs))
+
     def authorized(self):
         if not isValid(self) or not self.window._organization_allowed(self.scope):return False
         return self.target is None or self.window.db.anime_scope(self.target['anime_id'])==self.scope
@@ -48,7 +63,7 @@ class ScannerReview(QDialog):
         if not self.authorized():self.close();return
         key=(self.target['anime_id'],self.target['media_id']) if self.target else None
         rows=state.review_rows(self.window.db,self.scope)
-        self.items=[r for r in rows if self.filter.currentIndex() or r['state'] not in ('High Confidence','Existing match','Manual') or r['anime_id']==anime_id]
+        self.items=[r for r in rows if self.filter.currentIndex() or r['state'] not in ('High Confidence','Existing match','Manual','Part of parent release') or r['anime_id']==anime_id]
         self.sources.blockSignals(True);self.sources.clear()
         for row in self.items:self.sources.addItem(f"{row['title']}\n{row['state']} · Season {row['season'] or '—'} · {row['count']} files")
         self.sources.blockSignals(False)
@@ -104,7 +119,7 @@ class ScannerReview(QDialog):
         target=dict(self.target);query=self.query.text().strip();parsed=state.source_state(self.window.db,target['anime_id'])
         if not query:return
         def work():
-            client=AniListClient(max_retries=1,should_cancel=lambda:self.window._closing)
+            client=AniListClient(max_retries=1,should_cancel=lambda:self.window._closing,scope=self.scope,origin='manual-rematch',priority=0,force=True)
             report=client.lookup(query,target['season'] if query==target['title'] else None,detected_format=(target.get('format_hint') or parsed['format_hint']) if query==target['title'] else None,detected_part=parsed['part'] if query==target['title'] else None)
             cache=self.window.db.path.parent/'cache'/('restricted_artwork' if self.scope=='restricted' else 'artwork')
             candidates=[]
@@ -131,6 +146,7 @@ class ScannerReview(QDialog):
         try:state.manual_match(self.window.db,self.target['anime_id'],item,self.target['media_id'],self.scope,clear)
         except Exception as error:self.message.setText(f'Could not save the correction: {error}');return
         self.window._library_cache_dirty=True;self.window._library_page_cache.clear();self.window._library_franchise_cache={}
+        if clear:self.window.resume_metadata_jobs()
         self.reload();self.message.setText('Saved. Watch progress, ratings, favorites and collections were retained.'+(' Automatic matching is enabled again.' if clear else ' This choice is protected during rescans.'))
 
     def audit(self):
@@ -152,7 +168,8 @@ class ScannerReview(QDialog):
             item=dict(target['item'])
             if not (item.get('coverImage') or {}).get('large') and not (item.get('coverImage') or {}).get('extraLarge'):
                 from .anilist_integration import graphql
-                data=graphql('query($id:Int){Media(id:$id,type:ANIME){id type isAdult coverImage{extraLarge large} bannerImage}}',{'id':target['anilist_id']}).get('Media') or {}
+                from .anilist_transport import request_context
+                with request_context(scope=self.scope,origin='artwork-recovery',priority=0):data=graphql('query($id:Int){Media(id:$id,type:ANIME){id type isAdult coverImage{extraLarge large} bannerImage}}',{'id':target['anilist_id']}).get('Media') or {}
                 if data.get('id')!=target['anilist_id'] or data.get('type')!='ANIME' or data.get('isAdult') is not (self.scope=='restricted'):raise ValueError('The artwork identity is not authorized.')
                 item.update({k:data[k] for k in ('coverImage','bannerImage') if k in data})
             return cache_artwork(item,self.window.db.path.parent/'cache'/('restricted_artwork' if self.scope=='restricted' else 'artwork'))

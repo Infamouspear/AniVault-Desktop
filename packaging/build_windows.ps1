@@ -33,5 +33,5 @@ if (-not $iscc) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
 if (-not (Test-Path $iscc)) { throw 'Install Inno Setup 6 and rerun to compile the installer.' }
 & $iscc packaging\AniVault.iss
 Check-Exit
-Get-FileHash dist\installer\AniVault-1.9.0-Setup.exe -Algorithm SHA256
+Get-FileHash dist\installer\AniVault-1.9.1-Setup.exe -Algorithm SHA256
 Write-Host 'Built Windows installer. Follow the release-specific verification notes before publishing.'

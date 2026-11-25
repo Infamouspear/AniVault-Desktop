@@ -169,8 +169,10 @@ class MetadataTests(unittest.TestCase):
         def fake_time(): return now[0]
         def fake_sleep(seconds): now[0]+=seconds
         error=__import__("urllib.error").error.HTTPError("https://graphql.anilist.co",429,"Too Many Requests",{"Retry-After":"1"},io.BytesIO(b'{"errors":[{"message":"Too Many Requests"}]}'))
+        from anime_hub.anilist_transport import Scheduler
+        scheduler=Scheduler(clock=fake_time,sleep=fake_sleep,min_interval=0)
         statuses=[]
-        client=AniListClient(min_interval=0,max_retries=2,status_callback=statuses.append,
+        client=AniListClient(scheduler=scheduler,min_interval=0,max_retries=2,status_callback=statuses.append,
                              time_func=fake_time,sleep_func=fake_sleep)
         with patch("urllib.request.urlopen",side_effect=[error,FakeResponse(payload)]):
             report=client.lookup("Chainsaw Man",1)
@@ -187,7 +189,8 @@ class MetadataTests(unittest.TestCase):
             return __import__("urllib.error").error.HTTPError(
                 "https://graphql.anilist.co",429,"Too Many Requests",{"Retry-After":"1"},
                 io.BytesIO(b'{"errors":[{"message":"Too Many Requests"}]}'))
-        client=AniListClient(min_interval=0,max_retries=1,time_func=fake_time,sleep_func=fake_sleep)
+        from anime_hub.anilist_transport import Scheduler
+        client=AniListClient(scheduler=Scheduler(clock=fake_time,sleep=fake_sleep,min_interval=0),min_interval=0,max_retries=1,time_func=fake_time,sleep_func=fake_sleep)
         with patch("urllib.request.urlopen",side_effect=[rate_error(),rate_error()]) as request:
             report=client.lookup("Super Cub",1)
         self.assertEqual(request.call_count,2)

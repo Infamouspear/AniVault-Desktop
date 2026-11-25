@@ -33,6 +33,8 @@ from .release_safety import prepare_existing_database, record_release, splash_pr
 from .media_cards import POSTER_WIDTH,POSTER_HEIGHT,POSTER_CARD_WIDTH,poster_layout,CARD_WIDTH,CARD_HEIGHT,COVER_WIDTH,COVER_HEIGHT,media_layout,text_slot,footer_slot,ContainedListWidget
 from .database import Database
 from .scanner_review import ScannerReviewMixin
+from .metadata_queue_ui import MetadataQueueMixin
+from .anilist_transport import request_context,configure as configure_anilist
 from .local_manga_reader import LocalMangaReader
 from .manga_ui import MangaLibraryMixin
 from .organization_ui import OrganizationMixin
@@ -204,7 +206,7 @@ class ScanWorker(QThread):
             db=Database(self.db_path)
             count=scan(self.root, db, lambda a,b,c:self.progress.emit(a,b,c),
                        self.db_path.parent/"scanner_diagnostics.log", self.status.emit,
-                       self.isInterruptionRequested)
+                       self.isInterruptionRequested,match_online=False)
             _append_playback_log(f"ScannerComplete elapsed_ms={(time.perf_counter()-started)*1000:.0f} releases={count} cancelled={self.isInterruptionRequested()}")
             self.finished_count.emit(count)
         except Exception:
@@ -222,7 +224,8 @@ class AniListWorker(QThread):
     def __init__(self,operation,*args):
         super().__init__(); self.operation=operation; self.args=args
     def run(self):
-        try: self.succeeded.emit(self.operation(*self.args))
+        try:
+            with request_context(origin=self.operation.__name__,cancel=self.isInterruptionRequested):self.succeeded.emit(self.operation(*self.args))
         except Exception as exc: self.failed.emit(exc)
 
 
@@ -248,11 +251,11 @@ class DiscoverQueueWorker(QObject):
         if self._thread: self._thread.join(max(0,timeout)/1000)
     def run(self):
         while not self._stopping:
-            try: _,_,key,operation=self._jobs.get(timeout=.2)
+            try: priority,_,key,operation=self._jobs.get(timeout=.2)
             except queue.Empty: continue
             if self._stopping: break
             try:
-                result=operation()
+                with request_context(origin=key.split(':',1)[0],scope='restricted' if 'restricted' in key else 'normal',priority=0 if priority==0 else 30,cancel=lambda:self._stopping):result=operation()
                 if not self._stopping:self.succeeded.emit(key,result)
             except Exception as exc:
                 if not self._stopping:self.failed.emit(key,exc)
@@ -732,7 +735,7 @@ class StatusCountLabel(QLabel):
 
 from .airing_updates_ui import AiringUpdatesMixin
 
-class Window(ScannerReviewMixin,AiringUpdatesMixin,HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMixin,OrganizationMixin,MangaLibraryMixin,QMainWindow):
+class Window(MetadataQueueMixin,ScannerReviewMixin,AiringUpdatesMixin,HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMixin,OrganizationMixin,MangaLibraryMixin,QMainWindow):
     anilist_progress_updated=Signal(int,int,str)
     requests_changed=Signal()
     personal_rating_changed=Signal()
@@ -772,6 +775,8 @@ class Window(ScannerReviewMixin,AiringUpdatesMixin,HubMixin,LibraryFranchiseMixi
         self.setCentralWidget(self._build_chrome(shell))
         QApplication.instance().installEventFilter(self)
         self.restricted_shortcut=QShortcut(QKeySequence("Ctrl+Shift+R"),self);self.restricted_shortcut.activated.connect(self.unlock_restricted)
+        configure_anilist(APP_DIR)
+        self._init_metadata_queue()
         self._init_airing_updates()
         self.show_home()
         if self._new_install: self.show_first_run()
@@ -1579,7 +1584,6 @@ class Window(ScannerReviewMixin,AiringUpdatesMixin,HubMixin,LibraryFranchiseMixi
         if key in self._relation_inflight:
             self._relation_inflight[key].append((session,render,status,ids)); _append_playback_log(f"AniList relation request deduplicated ids={key}"); return
         listeners=[(session,render,status,ids)]; self._relation_inflight[key]=listeners
-        worker=AniListWorker(fetch_anime_relations,key); self.anilist_worker=worker
         _append_playback_log(f"AniList relation request started ids={key}")
         def succeeded(items):
             grouped={value:[] for value in key}
@@ -1603,7 +1607,7 @@ class Window(ScannerReviewMixin,AiringUpdatesMixin,HubMixin,LibraryFranchiseMixi
             else:
                 for listener_session,_,label,_ in active:
                     if self.current_view=="franchise_detail" and self._franchise_session==listener_session: label.setText("Related titles are temporarily unavailable. Try again later.")
-        worker.succeeded.connect(succeeded);worker.failed.connect(failed);worker.finished.connect(worker.deleteLater);worker.start()
+        self._submit_discover_job('franchise-detail-relations:'+str(key),lambda:fetch_anime_relations(key),succeeded,failed)
 
     def _request_discover_page(self,params,on_success,on_failure):
         requested=time.perf_counter();raw=dict(params);context=raw.pop("_context","Discover")
@@ -3042,9 +3046,9 @@ class Window(ScannerReviewMixin,AiringUpdatesMixin,HubMixin,LibraryFranchiseMixi
             return
         root=self.db.setting("library_root")
         if not root or not Path(root).exists(): AniVaultDialog.alert(self,"Library Unavailable","Choose a valid anime library folder in Settings."); return
-        self.statusBar().showMessage("Vee is scanning the vault…"); self.rescan_button.setEnabled(False)
+        self.local_scan_status='Running';self.statusBar().showMessage('Local Library Scan: discovering and indexing files…');self.rescan_button.setEnabled(False)
         self.scan_worker=ScanWorker(root,self.db_path)
-        self.scan_worker.progress.connect(lambda a,b,c:self.statusBar().showMessage(f"Scanning {a}/{b}: {c}"))
+        self.scan_worker.progress.connect(lambda a,b,c:self.statusBar().showMessage(f"Local Library Scan: {a}/{b} roots indexed · {c}"))
         self.scan_worker.status.connect(self.statusBar().showMessage)
         self.scan_worker.finished_count.connect(self._scan_completed)
         self.scan_worker.failed.connect(self._scan_failed)
@@ -3053,10 +3057,12 @@ class Window(ScannerReviewMixin,AiringUpdatesMixin,HubMixin,LibraryFranchiseMixi
 
     def _scan_completed(self, count):
         if not self._closing and (not self.scan_worker or not self.scan_worker.isInterruptionRequested()):
-            self.statusBar().showMessage(f"Scan complete: {count} releases")
+            self.local_scan_status=f'Completed: {count} roots indexed'
+            self.statusBar().showMessage(f'Local Library Scan completed: {count} releases. Metadata matching continues separately.')
             self._library_cache_dirty=True
             self.requests_changed.emit()
             self.show_library()
+            self.resume_metadata_jobs()
 
     def _scan_failed(self, details):
         if self._closing:return
@@ -3083,9 +3089,13 @@ class Window(ScannerReviewMixin,AiringUpdatesMixin,HubMixin,LibraryFranchiseMixi
             for reference in self._search_suggestions:
                 popup=reference()
                 if popup is not None and isValid(popup):popup.dismiss()
+            for dialog in self.findChildren(QDialog):
+                if hasattr(dialog,'queue_timer'):dialog.queue_timer.stop();dialog.close()
+            self._metadata_start_timer.stop()
+            if self.metadata_worker:self.metadata_worker.stop()
             self._discover_queue_worker.stop();self._discover_queue_handlers.clear()
             for reply in self._network.findChildren(QNetworkReply):reply.abort()
-            self._shutdown_workers=list({worker for worker in [self.scan_worker,self.anilist_worker,self.airing_page_worker,*self._discover_workers,*self.playback_monitors] if worker is not None and isValid(worker) and worker.isRunning()})
+            self._shutdown_workers=list({worker for worker in [self.scan_worker,self.metadata_worker,self.anilist_worker,self.airing_page_worker,*self._discover_workers,*self.playback_monitors] if worker is not None and isValid(worker) and worker.isRunning()})
             for worker in self._shutdown_workers:worker.requestInterruption()
             _append_playback_log(f'Shutdown requested qt_workers={len(self._shutdown_workers)}')
         if any(isValid(worker) and worker.isRunning() for worker in self._shutdown_workers):
