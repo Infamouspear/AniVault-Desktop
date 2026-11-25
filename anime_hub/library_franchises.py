@@ -175,7 +175,7 @@ class LibraryFranchiseMixin:
         card=CoverListCard(group.name,f'{len(group.rows)} local anime titles',covers,width=184,height=350,art_height=235)
         card.setProperty('posterCard',True);card.count_label.setToolTip(f'{watched}/{total} watched')
         self._register_status_card(card,group.scope,'local:'+str(group.rows[0]['id']))
-        card.setProperty('franchiseName',group.name);card.setProperty('franchiseLocalIds',group.local_ids);card.clicked.connect(lambda:self.show_library_franchise(group.local_ids,group.scope,displayed_group=group));return card
+        card.setProperty('franchiseName',group.name);card.setProperty('franchiseLocalIds',group.local_ids);card.clicked.connect(lambda:self.show_library_franchise(group.local_ids,group.scope,displayed_group=group));self._decorate_airing_card(card,group.local_ids,group.scope);return card
 
     def show_library_franchise(self,local_ids,scope='normal',displayed_group=None):
         if not self._organization_allowed(scope):return

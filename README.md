@@ -1,3 +1,7 @@
+# AniVault Desktop 1.8.1
+
+Simplified automatic **Airing in Your Vault** list and library card markers. No Watching or follow requirement. See [release notes and testing](DESKTOP_181_RELEASE_NOTES.md).
+
 # AniVault Desktop 1.8.0
 
 Initial D franchise navigation fix and persistent Airing Updates. See [release notes and testing instructions](DESKTOP_180_RELEASE_NOTES.md). Windows source builds use `packaging/build_windows.ps1`; development runs use `run_anivault.bat`. Earlier baseline notes below are historical.

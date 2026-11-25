@@ -1137,7 +1137,7 @@ class Window(AiringUpdatesMixin,HubMixin,LibraryFranchiseMixin,PolishMixin,Downl
         if self.current_view in {"airing_detail","restricted_detail"} and self.current_remote_item: return ("remote",self.current_remote_item,self.current_remote_source)
         if self.current_view=="discover_all" and self.current_discover_state: return ("discover_all",dict(self.current_discover_state))
         if self.current_view=="restricted_all" and self.current_discover_state:return ("restricted_all",dict(self.current_discover_state))
-        if self.current_view in {"statistics","restricted_statistics","home","settings","airing","airing_updates","collections","franchises","saved","downloads"}: return (self.current_view,)
+        if self.current_view in {"statistics","restricted_statistics","home","settings","airing","airing_updates","airing_history","collections","franchises","saved","downloads"}: return (self.current_view,)
         if self.current_view=="discover":return ("normal_discover",getattr(self,"discovery_media_type","ANIME"))
         if self.current_view=="restricted_discover":return (self.current_view,self.restricted_media_type)
         if self.current_view in {"restricted_home","restricted_saved","restricted_collections"}:return (self.current_view,)
@@ -1145,7 +1145,7 @@ class Window(AiringUpdatesMixin,HubMixin,LibraryFranchiseMixin,PolishMixin,Downl
 
     def _dispatch_route(self,route):
         kind=route[0]
-        actions={"statistics":self.show_statistics,"requests":self.show_requests,"status_hub":self.show_status_hub,"home":self.show_home,"settings":self.show_settings,"airing_updates":self.show_airing_updates,"airing":self.show_airing,"downloads":self.show_downloads,
+        actions={"statistics":self.show_statistics,"requests":self.show_requests,"status_hub":self.show_status_hub,"home":self.show_home,"settings":self.show_settings,"airing_updates":self.show_airing_updates,"airing_history":self.show_airing_history,"airing":self.show_airing,"downloads":self.show_downloads,
                  "collections":self.show_collections,"franchises":self.show_franchises,"discover":self.show_discover,"saved":self.show_saved}
         if kind=="restricted_statistics":self.show_statistics("restricted")
         elif kind=='library_franchise':self.show_library_franchise(route[1],route[2])
@@ -1241,6 +1241,7 @@ class Window(AiringUpdatesMixin,HubMixin,LibraryFranchiseMixin,PolishMixin,Downl
 
     def _register_status_card(self,card,scope,key):
         if hasattr(card,"set_manual_status"):self._status_card_refs.setdefault((scope,key),[]).append(weakref.ref(card))
+        if hasattr(card,'anime_id') and hasattr(self,'airing_updates'):self._decorate_airing_card(card,[card.anime_id],scope)
         if not hasattr(card,'_hub_selection'):
             card._hub_selection=SelectionHook(self,card,scope,key)
 
@@ -2399,7 +2400,7 @@ class Window(AiringUpdatesMixin,HubMixin,LibraryFranchiseMixin,PolishMixin,Downl
                     card.clicked.connect(lambda value,local_rows=by_anilist,items=item_map:self.show_detail(local_rows[value]["id"]) if value in local_rows else self.show_remote_anilist(items[value]))
                     notice=latest_updates.get(anilist_id)
                     indicator=('Up to Date' if notice['availability']=='present' else 'May Be Missing Episode '+str(notice['episode']) if notice['availability']=='missing' else 'New Episode Aired') if notice else ''
-                    followed='Followed' if self.airing_updates.followed(anilist_id) else ''
+                    followed='In your vault' if anilist_id in by_anilist else ''
                     if indicator or followed:
                         card.secondary.setText(' · '.join(filter(None,(followed,indicator or card.secondary.text()))));card.secondary.setToolTip(card.secondary.text())
                     self._add_airing_card_menu(card,item)

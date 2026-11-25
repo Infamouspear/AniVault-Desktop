@@ -62,22 +62,57 @@ class AiringUpdates:
                                        (int(item['id']), int(enabled), json.dumps(item), int(time.time())))
         return True
 
+    def local_titles(self):
+        stamp=self.db.change_stamp();cached=getattr(self,'_local_cache',None)
+        if cached and cached[0]==stamp:return cached[1]
+        result={}
+        for row in self.db.anime_list():
+            identifier=positive_id(row['anilist_id']);item=metadata(row['metadata_json']);item['id']=identifier
+            if identifier and self.db.anime_scope(row,fresh=False)=='normal' and identifier not in self.blocked_ids():
+                result.setdefault(identifier,[]).append((dict(row),item))
+        self._local_cache=(self.db.change_stamp(),result)
+        return result
+
     def candidates(self):
-        result = {}
-        prefs = {r['media_id']: dict(r) for r in self.db.connection.execute('SELECT * FROM airing_follows')}
-        for r in self.db.anime_list():
-            item = metadata(r['metadata_json']); identifier = positive_id(r['anilist_id'])
-            item['id'] = identifier
-            if self.db.anime_scope(r, fresh=False) != 'normal' or not self.allowed(item):
+        # Every eligible airing title in the vault is monitored automatically.
+        # Legacy follows/read/dismissal remain stored, but do not gate this list.
+        return {identifier:members[0][1] for identifier,members in self.local_titles().items()
+                if members[0][1].get('status')=='RELEASING' and self.allowed(members[0][1])}
+
+    def apply_catalog(self, items):
+        local=self.local_titles()
+        for item in items:
+            identifier=positive_id(item.get('id'))
+            if identifier not in local or item.get('type')!='ANIME' or type(item.get('isAdult')) is not bool:continue
+            if item['isAdult']:
+                self.db.observe_classifications([item],allow_normal=False)
+                scrubbed=json.dumps({'id':identifier,'type':'ANIME','isAdult':True})
+                with self.db.connection:
+                    self.db.connection.execute('UPDATE airing_follows SET enabled=0,metadata_json=? WHERE media_id=?',(scrubbed,identifier))
+                    self.db.connection.execute('UPDATE airing_updates SET metadata_json=? WHERE media_id=?',(scrubbed,identifier))
                 continue
-            if item.get('status') == 'RELEASING' and self.db.manual_status('normal', anime_id=r['id']) == 'Watching':
-                result[identifier] = item
-        for identifier, pref in prefs.items():
-            item = metadata(pref['metadata_json'])
-            if pref['enabled'] and self.allowed(item):
-                result[identifier] = item
-            elif not pref['enabled']:
-                result.pop(identifier, None)
+            for row,previous in local[identifier]:
+                updated={**previous,'isAdult':False,'status':item.get('status'),'nextAiringEpisode':item.get('nextAiringEpisode')}
+                if not previous.get('title'):updated['title']=item.get('title')
+                if updated!=previous:self.db.set_metadata(row['id'],identifier,updated)
+
+    def vault_titles(self):
+        stamp=self.db.change_stamp();cached=getattr(self,'_vault_cache',None)
+        if cached and cached[0]==stamp:return cached[1]
+        latest={}
+        for row in self.db.connection.execute('SELECT * FROM airing_updates WHERE airing_at<=? ORDER BY episode DESC,airing_at DESC',(int(time.time()),)):
+            if self.allowed(metadata(row['metadata_json'])):latest.setdefault(row['media_id'],dict(row))
+        inventory=self.inventory();result=[]
+        for identifier,item in self.candidates().items():
+            members=self.local_titles()[identifier];notice=latest.get(identifier)
+            availability=self.availability(identifier,notice['episode'],inventory) if notice else None
+            episodes=inventory.get(identifier,[]);numbers={m['episode'] for m in episodes if m['numbering_confident'] and positive_id(m['episode'])}
+            result.append({'media_id':identifier,'item':item,'local_ids':tuple(r['id'] for r,_ in members),
+                           'episode':notice['episode'] if notice else None,'availability':availability,
+                           'local_count':len(episodes),'local_latest':max(numbers) if numbers else None,
+                           'badge':('New ep '+str(notice['episode'])) if availability=='missing' else 'Airing'})
+        result.sort(key=lambda r:(r['availability']!='missing',str(r['item'].get('title') or {}).casefold()))
+        self._vault_cache=(self.db.change_stamp(),result)
         return result
 
     def inventory(self):
@@ -202,3 +237,20 @@ def fetch_airing_updates(identifiers, now, request=None, after=None):
         if start+20 < len(identifiers):
             time.sleep(2.1)
     return results
+
+
+def fetch_vault_airing(identifiers, now, after=None, request=None):
+    """Refresh identification status first, then retrieve actual episode schedules."""
+    from .anilist_integration import graphql
+    request=request or graphql;catalog=[]
+    query="""query($ids:[Int]) { Page(perPage:50) { media(id_in:$ids,type:ANIME) {
+      id type isAdult status title { english romaji } nextAiringEpisode { episode airingAt }
+    } } }"""
+    for start in range(0,len(identifiers),20):
+        payload=request(query,{'ids':list(identifiers[start:start+20])}).get('Page')
+        if not isinstance(payload,dict) or not isinstance(payload.get('media'),list):raise RuntimeError('Incomplete airing catalog')
+        catalog.extend(payload['media'])
+        if start+20<len(identifiers):time.sleep(2.1)
+    airing=[i['id'] for i in catalog if i.get('type')=='ANIME' and i.get('isAdult') is False and i.get('status')=='RELEASING']
+    schedules=fetch_airing_updates(airing,now,request,after) if airing else []
+    return {'catalog':catalog,'schedules':schedules}
