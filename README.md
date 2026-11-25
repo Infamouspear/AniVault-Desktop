@@ -1,3 +1,7 @@
+# AniVault Desktop 1.8.0
+
+Initial D franchise navigation fix and persistent Airing Updates. See [release notes and testing instructions](DESKTOP_180_RELEASE_NOTES.md). Windows source builds use `packaging/build_windows.ps1`; development runs use `run_anivault.bat`. Earlier baseline notes below are historical.
+
 # AniVault V1.1.2 Regression Fixes (1.1.2-rc.1)
 
 Start with `V112_RELEASE_NOTES.md` and `V112_VERIFICATION.md`. This focused patch

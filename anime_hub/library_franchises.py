@@ -29,7 +29,11 @@ def build_franchises(rows,relations=None,scope='normal'):
     for row in rows:
         item=metadata(row)
         if (item.get('isAdult') is True)!=(scope=='restricted') or not row['anilist_id']:continue
-        identifier=int(row['anilist_id']);by_id.setdefault(identifier,[]).append(row);parent[identifier]=identifier
+        try:identifier=int(row['anilist_id'])
+        except (TypeError,ValueError,OverflowError):continue
+        if identifier<=0:continue
+        row={**dict(row),'anilist_id':identifier}
+        by_id.setdefault(identifier,[]).append(row);parent[identifier]=identifier
         for edge in (item.get('relations') or {}).get('edges') or []:
             if isinstance(edge,dict) and isinstance(edge.get('node'),dict):raw.append((identifier,edge.get('relationType'),edge['node']))
     for source,items in relations.items():
@@ -210,10 +214,13 @@ class LibraryFranchiseMixin:
             for node in nodes:
                 if node.get('type')=='ANIME' and node.get('id') not in local_anilist and (node.get('isAdult') is True)==(scope=='restricted'):remote_nodes.setdefault(node['id'],{**node,'relationSource':display_title(metadata(row))})
         if remote_nodes:
-            title=QLabel('AniList-only related anime');title.setObjectName('section');flow.addWidget(title);remote_grid=ResponsiveLibraryGrid();flow.addWidget(remote_grid)
+            title=QLabel('Related anime outside this group');title.setObjectName('section');flow.addWidget(title);remote_grid=ResponsiveLibraryGrid();flow.addWidget(remote_grid)
             for node in sorted(remote_nodes.values(),key=lambda value:(value.get('seasonYear') or 9999,display_title(value))):
-                entity=store.resolve('anilist:'+str(node['id']),node);card=self._entity_card(entity)
+                entity=store.resolve('anilist:'+str(node['id']),node)
+                if entity is None:continue
+                card=self._entity_card(entity)
                 relation=str(node.get('relationType') or 'Related').replace('_',' ').title()
-                label=QLabel(f"{node.get('format') or 'Anime'} · AniList-only\n{entity.status or 'No manual status'} · {relation} relative to {node['relationSource']}");label.setWordWrap(True);label.setObjectName('muted');label.setAlignment(Qt.AlignCenter)
-                card.note.setText(label.text());label.deleteLater();card.setToolTip('AniList-only · '+relation+' relative to '+node['relationSource']);remote_grid.add_card(card)
+                label=QLabel(f"{node.get('format') or 'Anime'} · {'In Vault' if entity.local else 'AniList-only'}\n{entity.status or 'No manual status'} · {relation} relative to {node['relationSource']}");label.setWordWrap(True);label.setObjectName('muted');label.setAlignment(Qt.AlignCenter)
+                target=getattr(card,'note',card.status_label)
+                target.setText(label.text() if not entity.local else 'In Vault · '+relation);target.setToolTip(label.text());label.deleteLater();card.setToolTip(('In Vault' if entity.local else 'AniList-only')+' · '+relation+' relative to '+node['relationSource']);remote_grid.add_card(card)
         flow.addStretch();scroll.setWidget(host);outer.addWidget(scroll);self.replace(page)

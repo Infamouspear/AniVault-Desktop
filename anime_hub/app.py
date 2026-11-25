@@ -681,6 +681,7 @@ class TitleBar(QFrame):
             navigation=QPushButton(text);navigation.setFixedSize(30,32);navigation.setStyleSheet('padding:0;font-size:20px');navigation.clicked.connect(action);navigation.setToolTip('Back' if text=='‹' else 'Forward');layout.addWidget(navigation)
         layout.addSpacing(12)
         window.global_search=QLineEdit();window.global_search.setObjectName('globalSearch');window.global_search.setPlaceholderText('Search your vault, anime & manga…   Ctrl+K');window.global_search.setMinimumWidth(180);window.global_search.setMaximumWidth(700);window.global_search.setFixedHeight(36);decorate_search(window.global_search);layout.addWidget(window.global_search,1);layout.addStretch(1)
+        window.airing_bell=QPushButton('');window.airing_bell.setObjectName('airingBell');window.airing_bell.setFixedHeight(34);window.airing_bell.clicked.connect(window.show_airing_updates);layout.addWidget(window.airing_bell);layout.addSpacing(12)
         window.global_suggestions=SearchSuggestions(window,window.global_search,'normal')
         window.global_search.returnPressed.connect(lambda:window.show_global_search(window.global_search.text(),window._hub_scope))
         window.global_search_shortcut=QShortcut(QKeySequence('Ctrl+K'),window);window.global_search_shortcut.activated.connect(window._focus_global_search)
@@ -728,7 +729,9 @@ class StatusCountLabel(QLabel):
         self.refresh();super().showEvent(event)
 
 
-class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMixin,OrganizationMixin,MangaLibraryMixin,QMainWindow):
+from .airing_updates_ui import AiringUpdatesMixin
+
+class Window(AiringUpdatesMixin,HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMixin,OrganizationMixin,MangaLibraryMixin,QMainWindow):
     anilist_progress_updated=Signal(int,int,str)
     requests_changed=Signal()
     personal_rating_changed=Signal()
@@ -768,6 +771,7 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         self.setCentralWidget(self._build_chrome(shell))
         QApplication.instance().installEventFilter(self)
         self.restricted_shortcut=QShortcut(QKeySequence("Ctrl+Shift+R"),self);self.restricted_shortcut.activated.connect(self.unlock_restricted)
+        self._init_airing_updates()
         self.show_home()
         if self._new_install: self.show_first_run()
         elif not self.db.setting("library_root"): self.show_settings()
@@ -1133,7 +1137,7 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         if self.current_view in {"airing_detail","restricted_detail"} and self.current_remote_item: return ("remote",self.current_remote_item,self.current_remote_source)
         if self.current_view=="discover_all" and self.current_discover_state: return ("discover_all",dict(self.current_discover_state))
         if self.current_view=="restricted_all" and self.current_discover_state:return ("restricted_all",dict(self.current_discover_state))
-        if self.current_view in {"statistics","restricted_statistics","home","settings","airing","collections","franchises","saved","downloads"}: return (self.current_view,)
+        if self.current_view in {"statistics","restricted_statistics","home","settings","airing","airing_updates","collections","franchises","saved","downloads"}: return (self.current_view,)
         if self.current_view=="discover":return ("normal_discover",getattr(self,"discovery_media_type","ANIME"))
         if self.current_view=="restricted_discover":return (self.current_view,self.restricted_media_type)
         if self.current_view in {"restricted_home","restricted_saved","restricted_collections"}:return (self.current_view,)
@@ -1141,7 +1145,7 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
 
     def _dispatch_route(self,route):
         kind=route[0]
-        actions={"statistics":self.show_statistics,"requests":self.show_requests,"status_hub":self.show_status_hub,"home":self.show_home,"settings":self.show_settings,"airing":self.show_airing,"downloads":self.show_downloads,
+        actions={"statistics":self.show_statistics,"requests":self.show_requests,"status_hub":self.show_status_hub,"home":self.show_home,"settings":self.show_settings,"airing_updates":self.show_airing_updates,"airing":self.show_airing,"downloads":self.show_downloads,
                  "collections":self.show_collections,"franchises":self.show_franchises,"discover":self.show_discover,"saved":self.show_saved}
         if kind=="restricted_statistics":self.show_statistics("restricted")
         elif kind=='library_franchise':self.show_library_franchise(route[1],route[2])
@@ -1288,6 +1292,7 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         favorite.triggered.connect(lambda:self.set_favorite_from_context(anime_id,not bool(anime["favorite"]),current_collection))
         if scope=='restricted' and anime['anilist_id'] and self.db.is_saved(anime['anilist_id'],scope):
             menu.addAction('Remove from Saved').triggered.connect(lambda:self.set_saved({**json.loads(anime['metadata_json'] or '{}'),'id':anime['anilist_id']},False,scope))
+        self._add_airing_follow_menu(menu,{**json.loads(anime['metadata_json'] or '{}'),'id':anime['anilist_id']},scope)
         self._add_status_menu(menu,scope,anime_id=anime_id)
         menu.addSeparator(); add_menu=menu.addMenu("Add to Collection")
         memberships=self.db.anime_collection_ids(anime_id); collections=self.db.collections("Name",scope)
@@ -1329,6 +1334,7 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
 
     def remote_anime_menu(self,widget,pos,item,scope="normal",current_collection=None):
         menu=QMenu(self);menu.addAction("Open Details").triggered.connect(lambda:self.show_remote_anilist(item,"Restricted" if scope=="restricted" else "Saved"))
+        self._add_airing_follow_menu(menu,item,scope)
         self._add_status_menu(menu,scope,item=item);menu.addSeparator();add_menu=menu.addMenu("Add to Collection")
         key=f"anilist:{int(item['id'])}";store=self.organization(scope);entity=store.resolve(key,item);memberships=store.memberships(entity) if entity else set();collections=self.db.collections("Name",scope)
         for collection in collections:
@@ -2334,13 +2340,14 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         page=QWidget(); page_outer=QVBoxLayout(page); page_outer.setContentsMargins(22,18,22,18); self._top_header(page_outer)
         from .desktop_ui import library_header
         page_outer.addWidget(library_header("THIS SEASON",f"Airing · {label}","Current and upcoming anime from AniList"))
+        updates=QPushButton("View Airing Updates");updates.clicked.connect(self.show_airing_updates);page_outer.addWidget(updates,0,Qt.AlignLeft)
         scroll=AiringScrollArea("Airing")
         body=QWidget(); body.setSizePolicy(QSizePolicy.Expanding,QSizePolicy.Preferred); outer=QVBoxLayout(body); outer.setAlignment(Qt.AlignTop); scroll.setWidget(body); page_outer.addWidget(scroll); self.replace(page)
         scroll.viewport_resized.connect(lambda width,reason,p=page,s=scroll:self._apply_airing_viewport(p,s,width,reason))
         _append_playback_log(f"Airing opened main_window_size={self.width()}x{self.height()} page_size={page.width()}x{page.height()} viewport_size={scroll.viewport().width()}x{scroll.viewport().height()}")
         self._schedule_airing_reflow()
         status=QLabel("Vee is checking the current AniList season…"); status.setObjectName("muted"); outer.addWidget(status)
-        rows=self.db.anime_list(); by_anilist={int(row["anilist_id"]):row for row in rows if row["anilist_id"] is not None}
+        rows=self.db.anime_list(); by_anilist={int(row["anilist_id"]):row for row in rows if row["anilist_id"] is not None and self.db.anime_scope(row,fresh=False)=="normal"}
 
         rendered={"value":False}
         def render(catalog,source):
@@ -2353,19 +2360,22 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
             trending_raw=list(catalog["trending"] if "trending" in catalog else current_raw)
             popular_raw=list(catalog["popular"] if "popular" in catalog else current_raw)
             currently_raw=list(catalog["currently"] if "currently" in catalog else current_raw)
-            discovery_filter=lambda values:[item for item in values if item.get("isAdult") is not True]
+            blocked=self.airing_updates.blocked_ids()
+            discovery_filter=lambda values:[item for item in values if item.get("isAdult") is False and item.get("id") not in blocked]
             current=discovery_filter(current_raw); upcoming=discovery_filter(upcoming_raw)
             try: list_entries=json.loads(self.db.setting("anilist_user_list_cache","[]"))
             except (TypeError,ValueError): list_entries=[]
             remote_watching={int(entry["media"]["id"]) for entry in list_entries if entry.get("media") and entry["media"].get("id") and entry.get("status")=="CURRENT" and (entry.get("progress") or 0)>0}
             def actively_watching(item):
                 row=by_anilist.get(int(item["id"])); local=bool(row and 0<(row["watched_count"] or 0)<(row["episode_count"] or 0))
-                return local or int(item["id"]) in remote_watching
-            watching=[item for item in current if actively_watching(item)]
+                return local or bool(row and self.db.manual_status("normal",anime_id=row["id"])=="Watching") or int(item["id"]) in remote_watching
+            watching=list({item["id"]:item for item in discovery_filter(current+currently_raw) if item.get("status")=="RELEASING" and actively_watching(item)}.values())
             trending=discovery_filter(trending_raw)
             popular=discovery_filter(popular_raw)
             currently=discovery_filter(currently_raw)
             item_map={int(item["id"]):item for item in current+trending+popular+currently+upcoming}
+            latest_updates={}
+            for notice in self.airing_updates.history():latest_updates.setdefault(notice["media_id"],notice)
             preview_count=max(4,max(self.width()-280,700)//240)
             next_season,next_year=next_anime_season(season,year)
             specs={"Trending Now":(season,year,None,"TRENDING_DESC"),
@@ -2387,6 +2397,12 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
                     anilist_id=int(item["id"]); row=by_anilist.get(anilist_id)
                     card=SeasonCard(item,row is not None,self._load_remote_artwork,compact=True);self._register_status_card(card,'normal',self.db.entity_key_for_anime(row['id']) if row else 'anilist:'+str(item['id']))
                     card.clicked.connect(lambda value,local_rows=by_anilist,items=item_map:self.show_detail(local_rows[value]["id"]) if value in local_rows else self.show_remote_anilist(items[value]))
+                    notice=latest_updates.get(anilist_id)
+                    indicator=('Up to Date' if notice['availability']=='present' else 'May Be Missing Episode '+str(notice['episode']) if notice['availability']=='missing' else 'New Episode Aired') if notice else ''
+                    followed='Followed' if self.airing_updates.followed(anilist_id) else ''
+                    if indicator or followed:
+                        card.secondary.setText(' · '.join(filter(None,(followed,indicator or card.secondary.text()))));card.secondary.setToolTip(card.secondary.text())
+                    self._add_airing_card_menu(card,item)
                     cards.append(card)
                 section_layout.addWidget(ResponsiveSeasonGrid(cards,context=heading)); outer.addWidget(section_widget); self._schedule_airing_reflow()
             section("Watching This Season",watching); section("Trending Now",trending,True); section("Popular This Season",popular,True); section("Currently Airing",currently,True); section("Upcoming Next Season",upcoming,True); outer.addStretch()
@@ -2609,6 +2625,9 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         if media_type=='ANIME' and next_airing.get('episode'):info.addWidget(QLabel('Next airing: Episode '+str(next_airing['episode'])))
         info.addWidget(self._direct_status_controls(scope,anime_id=local_row['id'] if local_row and media_type=='ANIME' else None,item=item,manga_id=local_row['id'] if local_row and media_type=='MANGA' else None))
         actions=QHBoxLayout()
+        if scope=="normal":
+            follow=self._airing_follow_button(item)
+            if follow:actions.addWidget(follow)
         if local_row:
             badge=QPushButton('◈  In Vault');badge.setObjectName('primary');badge.clicked.connect(lambda:self.show_manga_detail(local_row['id']) if media_type=='MANGA' else self.show_detail(local_row['id']));actions.addWidget(badge)
         if scope=='normal' and media_type=='ANIME' and not local_row:
@@ -2639,6 +2658,9 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         page=QWidget();page.setProperty("transientPage",True); page_layout=QVBoxLayout(page); page_layout.setContentsMargins(18,14,18,14); self._top_header(page_layout)
         scroll=QScrollArea(); scroll.setWidgetResizable(True); body=QWidget(); outer=QVBoxLayout(body); scroll.setWidget(body); page_layout.addWidget(scroll)
         back=QPushButton("←  Back"); back.clicked.connect(self.navigate_back); outer.addWidget(back,0,Qt.AlignLeft)
+        if scope=="normal":
+            follow=self._airing_follow_button({**metadata,"id":anime["anilist_id"]})
+            if follow:outer.addWidget(follow,0,Qt.AlignLeft)
         display_title=(metadata.get("title",{}).get("english") or metadata.get("title",{}).get("romaji")
                        or anime["parsed_search_title"] or anime["title"] or anime["source_folder_name"] or "Unknown Anime")
         normal=[m for m in media if m["kind"]=="episode"]; watched=sum(1 for m in normal if m["watched"])
@@ -2829,6 +2851,7 @@ class Window(HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMi
         scroll=QScrollArea();scroll.setWidgetResizable(True);body=QWidget();scroll.setWidget(body);shell.addWidget(scroll)
         layout=QVBoxLayout(body); layout.setContentsMargins(28,22,28,22); self._top_header(layout); t=QLabel("AniVault Settings"); t.setObjectName("title"); layout.addWidget(t)
         intro=QLabel("Your anime, your library. Existing app data is preserved automatically."); intro.setObjectName("muted");intro.setWordWrap(True); layout.addWidget(intro)
+        self._airing_settings(layout)
         layout.addWidget(self.lan_server.settings())
         root=QLineEdit(self.db.setting("library_root","")); vlc=QLineEdit(self.db.setting("vlc_path",""))
         def picker(edit,folder=False):

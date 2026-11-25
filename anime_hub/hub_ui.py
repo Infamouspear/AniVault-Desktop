@@ -359,6 +359,7 @@ class HubMixin:
             self.context_rail.setProperty('restricted',scope=='restricted');self.context_rail.style().unpolish(self.context_rail);self.context_rail.style().polish(self.context_rail)
         self.global_search.setPlaceholderText('Search Restricted anime & manga…   Ctrl+K' if scope=='restricted' else 'Search your vault, anime & manga…   Ctrl+K')
         self._update_hub_rail_visibility();self._schedule_branding_ownership()
+        self._refresh_airing_bell()
     def _top_header(self,outer,placeholder=None):pass # One persistent header search replaces duplicate page search bars.
     def _open_hub_entity(self,entity):
         if not self._organization_allowed(entity.scope):return
@@ -463,6 +464,8 @@ class HubMixin:
         title=QLabel('Restricted Overview' if restricted else 'Home');title.setObjectName('heroTitle');head.addWidget(title)
         head.addWidget(QLabel('Your private anime & manga library.' if restricted else 'Your anime & manga library at a glance.'));head.addStretch()
         head.addWidget(stats_strip(data['summary']+(('Storage',data['storage']),)));content.addWidget(hero)
+        if not restricted and hasattr(self,'airing_updates'):
+            updates=QPushButton(f"Airing Updates · {len(self.airing_updates.history(unread=True))} unread");updates.setObjectName('homeAiringUpdates');updates.clicked.connect(self.show_airing_updates);content.addWidget(updates,0,Qt.AlignLeft)
         actions=CompactFilterLayout(36)
         for label,icon,callback in (
             ('Continue Watching','circle-play',lambda:self.show_library(state_filter='In Progress',scope=scope)),
