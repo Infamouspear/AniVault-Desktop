@@ -927,9 +927,9 @@ class Window(AiringUpdatesMixin,HubMixin,LibraryFranchiseMixin,PolishMixin,Downl
             label=QLabel(text); label.setObjectName("eyebrow"); layout.addWidget(label);labels.append(label)
         section("PRIMARY"); nav("home","⌂   Home",self.show_home)
         nav("all","▦   Anime",self.show_library);nav("manga","▤   Manga",lambda:self.show_manga_library());nav("favorites","♡   Favorites",self.show_favorites)
+        nav("collections","▤   Collections",lambda:self.show_collections("normal"))
         nav("statistics","Statistics",self.show_statistics)
         section("DISCOVER");nav("discover","✦   Discover",self.show_discover);nav("airing","◫   Airing / Upcoming",self.show_airing)
-        section("ORGANIZE");nav("planning","◇   Planning",lambda:self.show_status_list("Planning","normal"));nav("collections","▤   Collections",lambda:self.show_collections("normal"))
         section("SYSTEM");nav("requests","Requests && Feedback",self.show_requests);nav("downloads","↓   Downloads",self.show_downloads);nav("settings","⚙   Settings",self.show_settings)
         layout.addSpacing(7); self.restricted_label=QLabel("RESTRICTED"); self.restricted_label.setObjectName("eyebrow"); layout.addWidget(self.restricted_label); self.restricted_button=nav("restricted","◆   Restricted Archive",self.show_restricted_home)
         unlocked=self.db.setting("restricted_unlocked","0")=="1";self.restricted_label.setVisible(unlocked);self.restricted_button.setVisible(unlocked)
@@ -987,7 +987,7 @@ class Window(AiringUpdatesMixin,HubMixin,LibraryFranchiseMixin,PolishMixin,Downl
         self._set_active_nav("requests");self.replace(requests_page(self,provider))
 
     def _set_active_nav(self,key):
-        key=("planning" if self.current_status_name=="Planning" else "status_hub") if key=="collections" and self.current_view=="status_list" else "status_hub" if key in {"unwatched","completed"} else key
+        if key in {'planning','unwatched','completed'}:key='collections'
         key={"saved":"discover","franchises":"collections"}.get(key,key)
         self.active_nav_key=key
         highlight={"watching":"home","recent":"home","status_hub":"collections"}.get(key,key)
@@ -2174,14 +2174,22 @@ class Window(AiringUpdatesMixin,HubMixin,LibraryFranchiseMixin,PolishMixin,Downl
         title=QLabel(requested); title.setObjectName("title");overview_layout.addWidget(title)
         subtitle=QLabel("Browse and manage your anime collection");subtitle.setObjectName("muted");overview_layout.addWidget(subtitle);outer.addWidget(overview)
         controls=CompactFilterLayout(38); search=QLineEdit(search_text); search.setPlaceholderText("Search your library…"); decorate_search(search);search.setMinimumWidth(170);controls.addWidget(search)
-        category=QComboBox(); category.addItems(["All categories","Watching","Airing","Unwatched","Finished","Movies","Other"]); controls.addWidget(category); outer.addLayout(controls)
+        category=QComboBox(); category.setObjectName("libraryCategory"); category.addItems(["All categories","TV Anime","Web Anime","Movies","Specials","Airing","Finished","Watching","Unwatched","Other"]); controls.addWidget(category); outer.addLayout(controls)
         state=QComboBox(); state.addItems(["All states","Watched","Unwatched","In Progress","Completed","Has Extras","Favorites","Unrated"]); controls.addWidget(state)
         sort=QComboBox(); sort.addItems(["Title A-Z","Recently Added","Recently Watched","Progress","Year"]); controls.addWidget(sort)
         if category_filter and category.findText(category_filter)>=0: category.setCurrentText(category_filter)
         if state_filter and state.findText(state_filter)>=0: state.setCurrentText(state_filter)
         if sort_mode and sort.findText(sort_mode)>=0: sort.setCurrentText(sort_mode)
         view=QComboBox();view.setObjectName('libraryViewMode');view.addItems(['Franchises','Individual Titles']);view.setCurrentText(view_mode);view.setToolTip('Library view mode');controls.addWidget(view);view.setVisible(key=='all')
-        refresh_links=QPushButton('Relationships');refresh_links.setIcon(outline_icon('refresh-cw'));refresh_links.setToolTip('Refresh explicit AniList anime relationships');refresh_links.setVisible(key=='all' and scope=='normal');refresh_links.clicked.connect(lambda:self._request_library_relations(True));controls.addWidget(refresh_links)
+        refresh_links=QPushButton('Refresh relationships');refresh_links.setIcon(outline_icon('refresh-cw'));refresh_links.setToolTip('Refresh explicit AniList anime relationships');refresh_links.setVisible(key=='all' and scope=='normal');controls.addWidget(refresh_links)
+        relation_status=QLabel('The Franchises view groups titles using explicit AniList relationships.');relation_status.setObjectName('relationshipStatus');relation_status.setWordWrap(True);relation_status.setVisible(key=='all' and scope=='normal');outer.addWidget(relation_status)
+        self._library_relation_label=weakref.ref(relation_status)
+        def refresh_relationships():
+            view.setCurrentText('Franchises');scroll.verticalScrollBar().setValue(0)
+            self._load_library_relations()
+            self._library_relation_dates.clear()
+            self._request_library_relations(True)
+        refresh_links.clicked.connect(refresh_relationships)
         scroll=QScrollArea(); scroll.setWidgetResizable(True); grid=ResponsiveLibraryGrid(card_width=POSTER_CARD_WIDTH)
         db_started=time.perf_counter()
         cache_state="cached/reused"
@@ -2269,10 +2277,12 @@ class Window(AiringUpdatesMixin,HubMixin,LibraryFranchiseMixin,PolishMixin,Downl
             grid.clear_cards()
             prepared_started=time.perf_counter()
             query = search.text().casefold()
-            category_name = category.currentText().casefold() if category.currentIndex() else None
+            category_name = category.currentText() if category.currentIndex() else None
+            self.library_context.update(category_filter=category_name,state_filter=state.currentText() if state.currentIndex() else None,sort_mode=sort.currentText(),search_text=search.text(),genre=genre_filter.currentText() if genre_filter.currentIndex() else None)
+            from .library_filters import matches_category
             state_name = state.currentText()
             visible=[r for r in normal_rows if query in titles[r["id"]] and
-                     (category_name is None or r["category"].casefold()==category_name) and
+                     matches_category(r,catalog[r["id"]],category_name,status_map.get(row_key(r))) and
                      (r["personal_rating_units"] is None if state_name=="Unrated" else self._state_matches(r,state_name))]
             selected=status_group.checkedButton().text()
             visible=[r for r in visible if
@@ -2316,8 +2326,18 @@ class Window(AiringUpdatesMixin,HubMixin,LibraryFranchiseMixin,PolishMixin,Downl
                 if batch_end<len(visible): QTimer.singleShot(0,lambda:add_batch(batch_end))
                 else:
                     _append_playback_log(f"Card widget creation: {timing['widgets']*1000:.0f} ms\nArtwork loading/scaling: {timing['artwork']*1000:.0f} ms\nLibrary population complete: {(time.perf_counter()-navigation_started)*1000:.0f} ms ({len(visible)} cards)")
-            if not visible:grid.add_card(self._empty_state('results' if search.text() or category.currentIndex() or state.currentIndex() else 'empty','No matching anime.' if rows else 'Nothing here yet.',copy='Change filters or add your local library.'))
+            if not visible:
+                empty_host=QWidget();empty_layout=QVBoxLayout(empty_host)
+                empty_layout.addWidget(self._empty_state('results' if search.text() or category.currentIndex() or state.currentIndex() else 'empty','No matching anime.' if rows else 'Nothing here yet.',copy='Change filters or add your local library.'))
+                reset=QPushButton('Clear filters');reset.setObjectName('clearLibraryFilters');reset.clicked.connect(clear_filters);empty_layout.addWidget(reset);grid.add_card(empty_host)
             else:add_batch()
+        def clear_filters():
+            for control in (search,category,state,format_filter,year_filter,genre_filter):control.blockSignals(True)
+            search.clear()
+            for control in (category,state,format_filter,year_filter,genre_filter):control.setCurrentIndex(0)
+            status_group.buttons()[0].setChecked(True);genre_group.button(0).setChecked(True)
+            for control in (search,category,state,format_filter,year_filter,genre_filter):control.blockSignals(False)
+            rebuild()
         def schedule_search(_):
             page.resume_population = rebuild
             search_delay.start()
@@ -3035,6 +3055,7 @@ class Window(AiringUpdatesMixin,HubMixin,LibraryFranchiseMixin,PolishMixin,Downl
         if not self._closing and (not self.scan_worker or not self.scan_worker.isInterruptionRequested()):
             self.statusBar().showMessage(f"Scan complete: {count} releases")
             self._library_cache_dirty=True
+            self.requests_changed.emit()
             self.show_library()
 
     def _scan_failed(self, details):

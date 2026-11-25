@@ -104,6 +104,8 @@ class Database:
         self.connection.executescript(MANGA_SCHEMA)
         from .requests_store import SCHEMA as REQUEST_SCHEMA
         self.connection.executescript(REQUEST_SCHEMA)
+        from .requests_store import migrate_requests
+        migrate_requests(self.connection)
         from .airing_updates import SCHEMA as AIRING_SCHEMA
         self.connection.executescript(AIRING_SCHEMA)
         self._migrate()
@@ -452,6 +454,8 @@ class Database:
         self.connection.execute("DELETE FROM media WHERE present=0")
         self.connection.execute("DELETE FROM anime WHERE NOT EXISTS(SELECT 1 FROM media WHERE media.anime_id=anime.id)")
         self.connection.commit()
+        from .requests_store import Requests
+        Requests(self).reconcile_available()
 
     def personal_rating(self, kind, identifier):
         table={'ANIME':'anime','MANGA':'manga_series'}[kind]

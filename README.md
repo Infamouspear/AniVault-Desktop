@@ -1,3 +1,7 @@
+# AniVault Desktop 1.8.2
+
+Category and relationship fixes, a cleaner sidebar, and an automatically archived anime request review queue. See [release notes, migration and verification](DESKTOP_182_RELEASE_NOTES.md).
+
 # AniVault Desktop 1.8.1
 
 Simplified automatic **Airing in Your Vault** list and library card markers. No Watching or follow requirement. See [release notes and testing](DESKTOP_181_RELEASE_NOTES.md).

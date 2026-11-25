@@ -130,20 +130,33 @@ class LibraryFranchiseMixin:
             self._library_relation_data=relations if isinstance(relations,dict) else {};self._library_relation_dates={key:float(value) for key,value in (timestamps or {}).items() if isinstance(value,(int,float))}
         except (OSError,ValueError,TypeError,AttributeError):pass
 
+    def _relationship_notice(self,text):
+        reference=getattr(self,'_library_relation_label',None);label=reference() if reference else None
+        if label is not None and isValid(label):label.setText(text)
+        self.statusBar().showMessage(text,7000)
+
     def _request_library_relations(self,force=False):
         from .anilist_integration import fetch_anime_relations,AniListHTTPError
         from .app import _append_playback_log
         self._load_library_relations()
-        if self._closing or self._library_relations_loading or time.time()<self._discover_cooldown_until:return
-        ids=sorted({int(row['anilist_id']) for row in self.db.anime_list() if row['anilist_id'] and metadata(row).get('isAdult') is not True and (force or time.time()-self._library_relation_dates.get(str(row['anilist_id']),0)>7*86400)})
-        if not ids:return
+        if self._closing:return
+        if self._library_relations_loading:
+            if force:self._relationship_notice('Relationships are already being checked…')
+            return
+        if time.time()<self._discover_cooldown_until:
+            self._relationship_notice('AniList is rate-limiting requests. Existing franchise groups are kept; try again shortly.');return
+        ids=sorted({int(row['anilist_id']) for row in self.db.anime_list() if isinstance(row['anilist_id'],int) and row['anilist_id']>0 and self.db.anime_scope(row,fresh=False)=='normal' and (force or time.time()-self._library_relation_dates.get(str(row['anilist_id']),0)>7*86400)})
+        if not ids:
+            self._relationship_notice(f'{len(self._library_franchises())} franchise groups. Match titles to AniList if no relationships are available.');return
         batch=ids[:20];self._library_relations_loading=True
+        self._relationship_notice(f'Checking relationships for {len(batch)} titles…')
         def loaded(items):
             self._library_relations_loading=False
             if self._closing:return
             for identifier in batch:
                 self._library_relation_data[str(identifier)]=[item for item in items if item.get('sourceAniListId')==identifier and item.get('type')=='ANIME'];self._library_relation_dates[str(identifier)]=time.time()
             self._library_relation_revision+=1;self._library_franchise_cache={}
+            self._relationship_notice(f'Updated franchise groups: {len(self._library_franchises())}. Active filters still apply; unrelated titles remain individual.')
             self._library_relation_path.parent.mkdir(parents=True,exist_ok=True);temporary=self._library_relation_path.with_suffix('.tmp')
             try:temporary.write_text(json.dumps({'relations':self._library_relation_data,'timestamps':self._library_relation_dates}));temporary.replace(self._library_relation_path)
             except OSError as exc:_append_playback_log(f'LibraryRelations cache_error={type(exc).__name__}')
@@ -164,6 +177,7 @@ class LibraryFranchiseMixin:
                 QTimer.singleShot(500,lambda:self._request_library_relations() if not self._closing and self.current_view=='library' and self.active_nav_key=='all' else None)
         def failed(exc):
             self._library_relations_loading=False
+            self._relationship_notice('Could not refresh relationships. Existing groups are kept. Try again later.')
             if isinstance(exc,AniListHTTPError) and exc.status_code==429:self._discover_cooldown_until=max(self._discover_cooldown_until,time.time()+int(exc.retry_after or 15))
             _append_playback_log(f'LibraryRelations failure={type(exc).__name__} fallback=individual_titles')
         self._submit_discover_job('library-relations:'+str(batch),lambda:fetch_anime_relations(batch),loaded,failed)

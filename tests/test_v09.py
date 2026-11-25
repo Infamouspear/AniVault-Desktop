@@ -81,7 +81,7 @@ def test_shared_hero_fills_edges_at_multiple_aspects(window):
 
 def test_status_hub_planning_and_utility_routes_keep_history(window):
     w,qt,*_=window;w.show_home();w.show_status_hub();qt.processEvents();assert w.active_nav_key=='status_hub'
-    w.show_status_list('Planning');qt.processEvents();assert w.active_nav_key=='planning'
+    w.show_status_list('Planning');qt.processEvents();assert w.active_nav_key=='collections'
     w.navigate_back();qt.processEvents();assert w.current_view=='status_hub'
     w.show_collections();qt.processEvents();assert any(b.text()=='Franchise Groups' for b in w.stack.currentWidget().findChildren(QPushButton))
 

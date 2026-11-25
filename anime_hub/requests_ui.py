@@ -22,13 +22,13 @@ def state_map(window):
     stamp=window.db.change_stamp()
     cached=getattr(window,'_request_states',None)
     if cached and cached[0]==stamp:return cached[1]
-    states={r['provider_id']:r['status'] for r in store.all() if r['provider_id']}
+    states={r['provider_id']:r['status'] for r in store.visible() if r['provider_id']}
     window._request_states=(stamp,states)
     return states
 
 
 def request_button(window,item):
-    if item.get('isAdult') is not False or item.get('type','ANIME')!='ANIME':return None
+    if item.get('isAdult') is not False or item.get('type','ANIME')!='ANIME' or Requests(window.db).restricted(item.get('id')):return None
     item={**item,'type':'ANIME'}
     button=QPushButton()
     def refresh():
@@ -60,6 +60,10 @@ def editor(window,store,kind,row=None):
             description=QTextEdit();description.setPlainText(original);description.setReadOnly(True);description.setMaximumHeight(120);layout.addRow('Description',description)
         states=QComboBox();states.addItems(REQUEST if kind=='anime' else FEEDBACK);states.setCurrentText(row['status']);layout.addRow('Status',states)
         notes=QTextEdit();notes.setPlainText(row['notes']);layout.addRow('Notes',notes)
+        if kind=='anime':
+            events=store.events(row['id'])
+            if events:
+                timeline=QTextEdit();timeline.setReadOnly(True);timeline.setMaximumHeight(110);timeline.setPlainText('\n'.join(e['created']+' UTC · '+e['action']+' · '+str(e['previous_status'] or '')+' → '+e['status'] for e in events));layout.addRow('Decision history',timeline)
     else:
         title=QLineEdit();title.setMaxLength(200);layout.addRow('Title',title)
         category=QComboBox();category.addItems(('Anime title','Specific release','Other') if kind=='anime' else CATEGORIES);layout.addRow('Type',category)
@@ -77,17 +81,15 @@ def editor(window,store,kind,row=None):
     buttons.accepted.connect(save);buttons.rejected.connect(dialog.reject);dialog.resize(480,300);dialog.exec()
 
 
-def requests_page(window,provider=None):
+def _feedback_page(window,provider=None):
     from .app import AniVaultDialog
     store=Requests(window.db)
     page=QWidget();page.setProperty('transientPage',True)
-    outer=QVBoxLayout(page);outer.setContentsMargins(22,18,22,18)
-    title=QLabel('Requests & Feedback');title.setObjectName('title');outer.addWidget(title)
-    outer.addWidget(QLabel('Track anime you want added and feedback about AniVault. Stored on this desktop.'))
-    totals=QLabel();totals.setObjectName('muted');totals.setWordWrap(True);outer.addWidget(totals)
+    outer=QVBoxLayout(page);outer.setContentsMargins(0,0,0,0)
     tabs=QTabWidget();outer.addWidget(tabs,1)
     renderers=[]
-    for kind,caption in [('anime','Anime Requests'),('feedback','Feedback')]:
+    tabs.tabBar().hide()
+    for kind,caption in [('feedback','Feedback')]:
         tab=QWidget();tabs.addTab(tab,caption);layout=QVBoxLayout(tab)
         controls=CompactFilterLayout(38);layout.addLayout(controls)
         search=QLineEdit();search.setMinimumWidth(180);search.setPlaceholderText('Search titles…');decorate_search(search);controls.addWidget(search)
@@ -147,8 +149,26 @@ def requests_page(window,provider=None):
             signal.connect(lambda *_,fn=render:fn())
         renderers.append(render)
     def refresh():
-        counts=Counter(r['status'] for r in store.all() if r['kind']=='anime' and not store.restricted(r['provider_id']))
-        totals.setText(f"{sum(counts.values())} requests  ·  {counts['Requested']+counts['Under Review']} pending  ·  {counts['Approved']} approved  ·  {counts['Available']} available  ·  {counts['Declined']} declined")
         for render in renderers:render()
     listen(window,page,refresh);refresh()
+    return page
+
+
+def requests_page(window,provider=None):
+    from .request_queue_ui import AnimeQueue
+    store=Requests(window.db);page=QWidget();page.setProperty('transientPage',True)
+    outer=QVBoxLayout(page);outer.setContentsMargins(22,18,22,18)
+    title=QLabel('Requests & Feedback');title.setObjectName('title');outer.addWidget(title)
+    hint=QLabel('Review anime requests. Approved, declined and downloaded requests move to History automatically.');hint.setObjectName('muted');hint.setWordWrap(True);outer.addWidget(hint)
+    tabs=QTabWidget();queue=AnimeQueue(window,store);tabs.addTab(queue,'Anime Requests');tabs.addTab(_feedback_page(window),'Feedback');outer.addWidget(tabs,1)
+    listen(window,page,queue.refresh)
+    if provider:
+        row=next((r for r in store.visible() if r['kind']=='anime' and r['provider_id']==provider),None)
+        if row:
+            queue.mode.setCurrentIndex(int(bool(row['archived'])))
+            position=next((n for n,r in enumerate(queue.model.rows) if r['id']==row['id']),None)
+            if position is not None:
+                index=queue.model.index(position);queue.view.setCurrentIndex(index)
+                from PySide6.QtCore import QTimer
+                QTimer.singleShot(0,queue,lambda:queue.view.scrollTo(index))
     return page
