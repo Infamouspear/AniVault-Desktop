@@ -14,7 +14,7 @@ from typing import Callable
 
 ENDPOINT = "https://graphql.anilist.co"
 QUERY = """query ($search: String) { Page(page:1, perPage:8) { media(search:$search, type:ANIME) {
- id title { romaji english native } description(asHtml:false) season seasonYear genres tags { id name rank isMediaSpoiler isAdult } format status episodes isAdult popularity trending averageScore
+ id startDate { year month day } relations { edges { relationType node { id type format isAdult title { english romaji } } } } title { romaji english native } description(asHtml:false) season seasonYear genres tags { id name rank isMediaSpoiler isAdult } format status episodes isAdult popularity trending averageScore
  nextAiringEpisode { airingAt episode }
  coverImage { extraLarge large } bannerImage synonyms
  } } }"""
@@ -33,6 +33,8 @@ class LookupReport:
     retry_count: int = 0
     rate_limited: bool = False
     search_variants: list[str] = field(default_factory=list)
+    confidence_level: str = 'Unmatched'
+    decisions: list[dict] = field(default_factory=list)
 
     def diagnostic_lines(self) -> list[str]:
         candidate_titles = []
@@ -48,7 +50,7 @@ class LookupReport:
             f"Candidate count: {len(self.candidates)}",
             f"Candidate titles: {' | '.join(candidate_titles) if candidate_titles else 'None'}",
             f"Selected AniList ID: {self.selected.get('id') if self.selected else 'None'}",
-            f"Confidence: {self.confidence:.3f}",
+            f"Confidence: {self.confidence_level} (ranking score, not a probability)",
             f"Rate limited: {'Yes' if self.rate_limited else 'No'}",
             f"Retry count: {self.retry_count}",
             f"Failure reason: {self.failure_reason or 'None'}",
@@ -121,16 +123,18 @@ def search_variants(title: str, alternate_titles: tuple[str, ...] = ()) -> list[
 
 
 def _candidate_season(candidate: dict) -> int:
-    titles = candidate.get("title") or {}
-    text = " ".join(str(value) for value in [titles.get("english"), titles.get("romaji"),
-                                                *(candidate.get("synonyms") or [])] if value)
-    match = re.search(r"\bseason\s*(\d+)|\b(\d+)(?:st|nd|rd|th)\s+season\b", text, re.I)
-    if match:
-        return int(match.group(1) or match.group(2))
+    titles=candidate.get('title') or {};values=[*titles.values(),*(candidate.get('synonyms') or [])]
+    for value in values:
+        match=re.search(r'\bseason\s*(\d+)|\b(\d+)(?:st|nd|rd|th)\s+season\b',str(value),re.I)
+        if match:return int(match.group(1) or match.group(2))
+    for value in values:
+        if re.search(r'\b(?:part|cour)\s*\d+',str(value),re.I):continue
+        match=re.search(r'\s([2-9])\s*$',str(value))
+        if match:return int(match.group(1))
     return 1
 
 
-def _score(search: str, candidate: dict, detected_season: int | None = None,
+def _old_score(search: str, candidate: dict, detected_season: int | None = None,
            detected_year: int | None = None, local_episode_count: int | None = None,
            alternate_searches: tuple[str, ...] = ()) -> float:
     titles = candidate.get("title") or {}
@@ -188,6 +192,37 @@ def _score(search: str, candidate: dict, detected_season: int | None = None,
     return max(0.0, min(1.0, score))
 
 
+MATCH_GENERIC={'ova','ovas','oad','special','specials','movie','movies','season','series','part','cour','sp'}
+
+def evaluate_candidate(search,candidate,season=None,year=None,count=None,alternates=(),format_hint=None,part=None):
+    reasons=[];values=list((candidate.get('title') or {}).values())+list(candidate.get('synonyms') or [])
+    anchors=[_words(v)-MATCH_GENERIC for v in (search,*alternates)]
+    anchors=[v for v in anchors if v]
+    if not anchors:return {'id':candidate.get('id'),'score':0.0,'eligible':False,'reason':'No franchise title evidence; generic release label only.'}
+    if not isinstance(candidate.get('id'),int) or not values or candidate.get('type','ANIME')!='ANIME':reasons.append('Invalid or incompatible media identity.')
+    if season and _candidate_season(candidate)!=season:reasons.append('Conflicting season number.')
+    candidate_parts={int(m.group(1)) for value in values for m in re.finditer(r'\b(?:part|cour)\s*(\d+)',str(value),re.I)}
+    if part and (candidate_parts!={part}):reasons.append('Missing or conflicting part/cour identifier.')
+    local_text=' '.join(str(v) for v in (search,*alternates)).casefold()
+    for qualifier in ('picture drama','prologue','recap','compilation','digest'):
+        if any(qualifier in str(value).casefold() for value in values) and qualifier not in local_text:reasons.append('Unrequested '+qualifier+' release.')
+    kind=candidate.get('format')
+    allowed={'SERIES':{'TV','TV_SHORT','ONA'},'MOVIE':{'MOVIE'},'OVA':{'OVA','ONA','SPECIAL'},'SPECIAL':{'SPECIAL','OVA','ONA'}}
+    if format_hint in allowed and kind and kind not in allowed[format_hint]:reasons.append('Incompatible media format.')
+    shared=max((len(anchor & (_words(v)-MATCH_GENERIC)) for anchor in anchors for v in values if v),default=0)
+    if not shared:reasons.append('Franchise title conflicts with the local release.')
+    if reasons:return {'id':candidate.get('id'),'score':0.0,'eligible':False,'reason':' '.join(reasons)}
+    score=_old_score(search,candidate,season,year,count,alternates)
+    # Distinctive short franchise names need complete token evidence, not fuzzy fragments.
+    single=next((next(iter(a)) for a in anchors if len(a)==1),None)
+    if single and len(single)>=7 and single not in GENERIC_FALLBACK_WORDS and any(re.match(r'^'+re.escape(single)+r'\b',str(v),re.I) for v in values if v):score=max(score,.94)
+    return {'id':candidate.get('id'),'score':score,'eligible':True,'reason':'Title evidence and release constraints agree.'}
+
+
+def _score(search,candidate,detected_season=None,detected_year=None,local_episode_count=None,alternate_searches=()):
+    return evaluate_candidate(search,candidate,detected_season,detected_year,local_episode_count,alternate_searches)['score']
+
+
 class AniListClient:
     """Single serialized AniList request queue with rate-limit-aware retries."""
 
@@ -228,7 +263,7 @@ class AniListClient:
 
     def lookup(self, title: str, detected_season: int | None = None,
                detected_year: int | None = None, alternate_titles: tuple[str, ...] = (),
-               local_episode_count: int | None = None) -> LookupReport:
+               local_episode_count: int | None = None, detected_format=None, detected_part=None) -> LookupReport:
         report = LookupReport(search_title=title)
         variants = search_variants(title, alternate_titles)
         candidate_map = {}
@@ -236,8 +271,10 @@ class AniListClient:
             for variant in variants:
                 report.search_variants.append(variant)
                 payload = json.dumps({"query": QUERY, "variables": {"search": variant}}).encode()
-                body = None
-                for attempt in range(self.max_retries + 1):
+                cache=getattr(self,'query_cache',None)
+                body=cache.get(variant) if cache is not None else None
+                if body is not None:report.http_status=200
+                for attempt in range(0 if body is not None else self.max_retries+1):
                     if not self._sleep_until(max(self._next_request_at, self._blocked_until)):
                         report.failure_reason = "Metadata scan cancelled"
                         return report
@@ -248,6 +285,7 @@ class AniListClient:
                     try:
                         with urllib.request.urlopen(request,timeout=20) as response:
                             report.http_status=response.status; body=json.load(response); headers=response.headers
+                        if cache is not None:cache[variant]=body
                         report.api_error=""; report.failure_reason=""
                         self._next_request_at=self.time_func()+self.min_interval
                         remaining=headers.get("X-RateLimit-Remaining"); reset=headers.get("X-RateLimit-Reset")
@@ -284,19 +322,21 @@ class AniListClient:
                     report.api_error=json.dumps(body,ensure_ascii=False)[:1000]
                     report.failure_reason="Unexpected AniList response shape"; return report
                 for item in candidates:
-                    candidate_map[item["id"]]=item
+                    if isinstance(item,dict) and type(item.get('id')) is int and item['id']>0 and isinstance(item.get('title'),dict):candidate_map[item['id']]=item
                 report.candidates=list(candidate_map.values())
                 if report.candidates:
-                    ranked=sorted(((_score(title,item,detected_season,detected_year,local_episode_count,
-                                           alternate_titles),item) for item in report.candidates),
-                                  reverse=True,key=lambda pair:pair[0])
-                    report.confidence,best=ranked[0]
-                    if report.confidence>=0.84:
-                        report.selected=best; report.failure_reason=""; break
+                    evaluations=[evaluate_candidate(title,item,detected_season,detected_year,local_episode_count,alternate_titles,detected_format,detected_part) for item in report.candidates]
+                    report.decisions=evaluations
+                    ranked=sorted(zip(evaluations,report.candidates),key=lambda pair:pair[0]['score'],reverse=True)
+                    best_score,best=ranked[0];report.confidence=best_score['score']
+                    runner=ranked[1][0]['score'] if len(ranked)>1 else 0
+                    if best_score['eligible'] and report.confidence>=.86 and report.confidence-runner>=.05:
+                        report.selected=best;report.confidence_level='High Confidence';report.failure_reason='';break
+                    report.confidence_level='Needs Review'
         if not report.candidates:
             report.failure_reason="AniList returned no candidates after fallback searches"
         elif not report.selected:
-            report.failure_reason="Best candidate was below the 0.84 confidence threshold; available for manual match"
+            report.failure_reason="Candidate evidence is weak, contradictory or too close; available for manual match"
         return report
 
 
@@ -305,9 +345,9 @@ _DEFAULT_CLIENT = AniListClient()
 
 def lookup_anilist(title: str, detected_season: int | None = None,
                    detected_year: int | None = None, client: AniListClient | None = None,
-                   alternate_titles: tuple[str, ...] = (), local_episode_count: int | None = None) -> LookupReport:
+                   alternate_titles: tuple[str, ...] = (), local_episode_count: int | None = None, detected_format=None, detected_part=None) -> LookupReport:
     return (client or _DEFAULT_CLIENT).lookup(title, detected_season, detected_year,
-                                              alternate_titles, local_episode_count)
+                                              alternate_titles, local_episode_count, detected_format, detected_part)
 
 
 def search_anilist(title: str):
@@ -318,17 +358,36 @@ def search_anilist(title: str):
 
 
 def cache_artwork(metadata: dict, cache_dir: Path) -> dict:
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    anime_id = metadata["id"]
-    for field, remote in (("cover_path", metadata.get("coverImage", {}).get("extraLarge")),
-                          ("banner_path", metadata.get("bannerImage"))):
-        if not remote:
-            continue
-        suffix = Path(remote.split("?", 1)[0]).suffix or ".jpg"
-        destination = cache_dir / f"{anime_id}_{field}{suffix}"
-        if not destination.exists():
-            request = urllib.request.Request(remote, headers={"User-Agent": "AniVault/0.6"})
-            with urllib.request.urlopen(request, timeout=20) as response, destination.open("wb") as output:
-                output.write(response.read())
-        metadata[field] = str(destination)
+    import io,uuid
+    from PIL import Image
+    metadata=dict(metadata);cache_dir.mkdir(parents=True,exist_ok=True)
+    for field,remote in (("cover_path",(metadata.get('coverImage') or {}).get('extraLarge') or (metadata.get('coverImage') or {}).get('large')),("banner_path",metadata.get('bannerImage'))):
+        if metadata.get(field) and Path(metadata[field]).is_file():
+            try:
+                with Image.open(metadata[field]) as image:image.verify()
+                continue
+            except (OSError,ValueError):
+                if not re.match(r'^\d+_(?:cover|banner)_path\.',Path(metadata[field]).name):raise ValueError('Custom artwork cannot be read; choose a valid local image.')
+                metadata.pop(field,None)
+        if not remote:continue
+        from urllib.parse import urlsplit
+        url=urlsplit(remote)
+        if url.scheme!='https' or not url.hostname or url.username or url.password:raise ValueError('Invalid artwork address')
+        suffix=Path(url.path).suffix or '.jpg';destination=cache_dir/f"{metadata['id']}_{field}{suffix}"
+        valid=False
+        if destination.is_file():
+            try:
+                with Image.open(destination) as image:image.verify()
+                valid=True
+            except (OSError,ValueError):pass
+        if not valid:
+            request=urllib.request.Request(remote,headers={'User-Agent':'AniVault'})
+            with urllib.request.urlopen(request,timeout=20) as response:data=response.read(32*1024*1024+1)
+            if len(data)>32*1024*1024:raise ValueError('Artwork exceeds size limit')
+            with Image.open(io.BytesIO(data)) as image:image.verify()
+            temporary=destination.with_name(destination.name+'.'+uuid.uuid4().hex+'.part')
+            try:temporary.write_bytes(data);temporary.replace(destination)
+            finally:
+                if temporary.exists():temporary.unlink()
+        metadata[field]=str(destination)
     return metadata

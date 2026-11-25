@@ -32,6 +32,7 @@ from .icons import NAV_ICONS, outline_icon
 from .release_safety import prepare_existing_database, record_release, splash_preferences
 from .media_cards import POSTER_WIDTH,POSTER_HEIGHT,POSTER_CARD_WIDTH,poster_layout,CARD_WIDTH,CARD_HEIGHT,COVER_WIDTH,COVER_HEIGHT,media_layout,text_slot,footer_slot,ContainedListWidget
 from .database import Database
+from .scanner_review import ScannerReviewMixin
 from .local_manga_reader import LocalMangaReader
 from .manga_ui import MangaLibraryMixin
 from .organization_ui import OrganizationMixin
@@ -731,7 +732,7 @@ class StatusCountLabel(QLabel):
 
 from .airing_updates_ui import AiringUpdatesMixin
 
-class Window(AiringUpdatesMixin,HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMixin,OrganizationMixin,MangaLibraryMixin,QMainWindow):
+class Window(ScannerReviewMixin,AiringUpdatesMixin,HubMixin,LibraryFranchiseMixin,PolishMixin,DownloadsMixin,RelatedMixin,OrganizationMixin,MangaLibraryMixin,QMainWindow):
     anilist_progress_updated=Signal(int,int,str)
     requests_changed=Signal()
     personal_rating_changed=Signal()
@@ -1048,6 +1049,8 @@ class Window(AiringUpdatesMixin,HubMixin,LibraryFranchiseMixin,PolishMixin,Downl
             self.db.set_setting("restricted_unlocked","1");self.restricted_label.show();self.restricted_button.show();self.show_restricted_home()
 
     def lock_restricted(self):
+        dialog=getattr(self,'_scanner_review_dialog',None)
+        if dialog is not None and isValid(dialog) and dialog.scope=='restricted':dialog.close()
         self.lan_server.auth.lock_archive()
         if self.player_page is not None and self.current_anime_id is not None and self.db.anime_scope(self.current_anime_id)=='restricted':
             self._stop_integrated_player(save_resume=True,reason='Restricted lock')
@@ -2182,6 +2185,7 @@ class Window(AiringUpdatesMixin,HubMixin,LibraryFranchiseMixin,PolishMixin,Downl
         if sort_mode and sort.findText(sort_mode)>=0: sort.setCurrentText(sort_mode)
         view=QComboBox();view.setObjectName('libraryViewMode');view.addItems(['Franchises','Individual Titles']);view.setCurrentText(view_mode);view.setToolTip('Library view mode');controls.addWidget(view);view.setVisible(key=='all')
         refresh_links=QPushButton('Refresh relationships');refresh_links.setIcon(outline_icon('refresh-cw'));refresh_links.setToolTip('Refresh explicit AniList anime relationships');refresh_links.setVisible(key=='all' and scope=='normal');controls.addWidget(refresh_links)
+        scan_review=QPushButton('Scanner Review');scan_review.clicked.connect(lambda:self.show_scanner_review(scope=scope));controls.addWidget(scan_review)
         relation_status=QLabel('The Franchises view groups titles using explicit AniList relationships.');relation_status.setObjectName('relationshipStatus');relation_status.setWordWrap(True);relation_status.setVisible(key=='all' and scope=='normal');outer.addWidget(relation_status)
         self._library_relation_label=weakref.ref(relation_status)
         def refresh_relationships():
@@ -2282,13 +2286,13 @@ class Window(AiringUpdatesMixin,HubMixin,LibraryFranchiseMixin,PolishMixin,Downl
             from .library_filters import matches_category
             state_name = state.currentText()
             visible=[r for r in normal_rows if query in titles[r["id"]] and
-                     matches_category(r,catalog[r["id"]],category_name,status_map.get(row_key(r))) and
+                     matches_category(r,catalog[r["id"]],category_name,status_map.get(f"local:{r['id']}",status_map.get(row_key(r)))) and
                      (r["personal_rating_units"] is None if state_name=="Unrated" else self._state_matches(r,state_name))]
             selected=status_group.checkedButton().text()
             visible=[r for r in visible if
-                (selected=='All' or status_map.get(row_key(r))==selected
-                 or (not status_map.get(row_key(r)) and selected=='Watching' and 0<(r['watched_count'] or 0)<(r['episode_count'] or 0))
-                 or (not status_map.get(row_key(r)) and selected=='Completed' and 0<(r['episode_count'] or 0)<=(r['watched_count'] or 0)))
+                (selected=='All' or status_map.get(f"local:{r['id']}",status_map.get(row_key(r)))==selected
+                 or (not status_map.get(f"local:{r['id']}",status_map.get(row_key(r))) and selected=='Watching' and 0<(r['watched_count'] or 0)<(r['episode_count'] or 0))
+                 or (not status_map.get(f"local:{r['id']}",status_map.get(row_key(r))) and selected=='Completed' and 0<(r['episode_count'] or 0)<=(r['watched_count'] or 0)))
                 and (format_filter.currentIndex()==0 or catalog[r['id']].get('format')==format_filter.currentText())
                 and (year_filter.currentIndex()==0 or str(catalog[r['id']].get('seasonYear'))==year_filter.currentText())
                 and (genre_filter.currentIndex()==0 or genre_filter.currentText() in (catalog[r['id']].get('genres') or []))]
@@ -2316,7 +2320,7 @@ class Window(AiringUpdatesMixin,HubMixin,LibraryFranchiseMixin,PolishMixin,Downl
                     row=visible[i]; card_started=time.perf_counter()
                     if isinstance(row,dict) and row.get('_franchise'):card=self._franchise_card(row['_franchise'])
                     else:
-                        card=Card(row,show_progress=(row["watched_count"] or 0)>0,timings=timing,manual_status=status_map.get(row_key(row)));self._register_status_card(card,scope,row_key(row));card.clicked.connect(self.show_detail);self._attach_collection_menu(card,row["id"],scope=scope)
+                        card=Card(row,show_progress=(row["watched_count"] or 0)>0,timings=timing,manual_status=status_map.get(f"local:{row['id']}",status_map.get(row_key(row))));self._register_status_card(card,scope,row_key(row));card.clicked.connect(self.show_detail);self._attach_collection_menu(card,row["id"],scope=scope)
                     batch.append(card)
                     timing["widgets"]+=time.perf_counter()-card_started
                 grid.add_cards(batch);page.resume_population=(lambda:add_batch(batch_end)) if batch_end<len(visible) else None
@@ -2712,6 +2716,7 @@ class Window(AiringUpdatesMixin,HubMixin,LibraryFranchiseMixin,PolishMixin,Downl
         if chips.count():outer.addLayout(chips)
         utility=QHBoxLayout(); all_watched=QPushButton("Mark All Watched"); all_watched.clicked.connect(lambda:self.mark_all(anime_id,True)); utility.addWidget(all_watched)
         all_unwatched=QPushButton("Mark All Unwatched"); all_unwatched.clicked.connect(lambda:self.mark_all(anime_id,False)); utility.addWidget(all_unwatched)
+        details=QPushButton('View Scan Details');details.clicked.connect(lambda:self.show_scanner_review(anime_id,self.db.anime_scope(anime_id)));utility.addWidget(details)
         match=QPushButton("Match / Change AniList Entry"); match.clicked.connect(lambda:self.match_anime(anime_id,anime["title"])); utility.addWidget(match); utility.addStretch(); outer.addLayout(utility)
 
         lists=QHBoxLayout(); episodes=ContainedListWidget(); extras=ContainedListWidget(); next_id=next_episode["id"] if next_episode else None
@@ -2791,12 +2796,7 @@ class Window(AiringUpdatesMixin,HubMixin,LibraryFranchiseMixin,PolishMixin,Downl
         menu.exec(widget.mapToGlobal(pos))
 
     def match_anime(self, anime_id, title):
-        dialog=MatchDialog(self,title)
-        if dialog.exec() and dialog.selected:
-            try: selected=cache_artwork(dialog.selected,APP_DIR/"cache"/"artwork")
-            except Exception as exc:
-                selected=dialog.selected; AniVaultDialog.alert(self,"Artwork Cache",f"The match was saved, but artwork could not be cached.\n\n{exc}")
-            self.db.set_metadata(anime_id,selected["id"],selected); self._library_cache_dirty=True; self.show_detail(anime_id)
+        self.show_scanner_review(anime_id,self.db.anime_scope(anime_id))
 
     def classify_menu(self, widget, pos, anime_id):
         item=widget.itemAt(pos)

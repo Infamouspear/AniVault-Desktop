@@ -109,6 +109,8 @@ class Database:
         from .airing_updates import SCHEMA as AIRING_SCHEMA
         self.connection.executescript(AIRING_SCHEMA)
         self._migrate()
+        from .scan_state import migrate as migrate_scan
+        migrate_scan(self)
         self.connection.executescript("CREATE INDEX IF NOT EXISTS manual_status_list ON manual_status(scope,status,updated_at DESC); CREATE INDEX IF NOT EXISTS collection_entries_added ON collection_entries(collection_id,added_at DESC);")
 
     def _migrate(self):
@@ -408,8 +410,18 @@ class Database:
                                         (collection_id,key,json.dumps(item)))
         self.connection.commit();return bool(cursor.rowcount)
 
-    def start_scan(self):
-        self.connection.execute("UPDATE media SET present=0")
+    def start_scan(self, root=None):
+        if root is None:
+            self.connection.execute("UPDATE media SET present=0")
+            return
+        import os
+        base=os.path.normcase(os.path.abspath(str(root)))
+        identifiers=[]
+        for row in self.connection.execute('SELECT id,root_path FROM anime'):
+            try:
+                if os.path.commonpath([base,os.path.normcase(os.path.abspath(row['root_path']))])==base:identifiers.append(row['id'])
+            except ValueError:pass
+        self.connection.executemany('UPDATE media SET present=0 WHERE anime_id=?',[(i,) for i in identifiers])
 
     def upsert_anime(self, identity, title, alt_title, category, root_path,
                      source_folder_name="", parsed_search_title="", detected_season=None,
@@ -431,16 +443,17 @@ class Database:
         kind = override[0] if override else parsed.kind
         file_info = parsed.path.stat()
         modified = file_info.st_mtime
-        current=self.connection.execute("SELECT id FROM media WHERE path=?",(str(parsed.path),)).fetchone()
+        current=self.connection.execute("SELECT id,anime_id FROM media WHERE path=?",(str(parsed.path),)).fetchone()
+        if current is not None:anime_id=current['anime_id']
         if current is None:
-            relocated=self.connection.execute("""SELECT id,path FROM media WHERE anime_id=? AND present=0 AND kind=?
-              AND COALESCE(season,-1)=COALESCE(?,-1) AND COALESCE(episode,-1)=COALESCE(?,-1)""",
-              (anime_id,kind,parsed.season,parsed.episode)).fetchall()
-            if len(relocated)==1:
+            signature=f'{file_info.st_dev}:{file_info.st_ino}' if file_info.st_ino else None
+            relocated=self.connection.execute("SELECT id,path FROM media WHERE anime_id=? AND present=0 AND file_identity=?",(anime_id,signature)).fetchall() if signature else []
+            if len(relocated)==1 and not Path(relocated[0]["path"]).exists():
                 old_path=relocated[0]["path"]
                 self.connection.execute("""UPDATE media SET path=?,kind=?,season=?,episode=?,detected_kind=?,present=1,modified=?,size_bytes=? WHERE id=?""",
                                         (str(parsed.path),kind,parsed.season,parsed.episode,parsed.kind,modified,file_info.st_size,relocated[0]["id"]))
                 self.connection.execute("UPDATE overrides SET path=? WHERE path=?",(str(parsed.path),old_path))
+                self.connection.execute('UPDATE media SET file_identity=?,episode_end=? WHERE id=?',(f'{file_info.st_dev}:{file_info.st_ino}' if file_info.st_ino else None,getattr(parsed,'episode_end',None),relocated[0]['id']))
                 return
         self.connection.execute("""INSERT INTO media(anime_id,path,kind,season,episode,detected_kind,present,modified,size_bytes)
           VALUES(?,?,?,?,?,?,1,?,?) ON CONFLICT(path) DO UPDATE SET anime_id=excluded.anime_id,
@@ -449,10 +462,10 @@ class Database:
           season=excluded.season,episode=excluded.episode,detected_kind=excluded.detected_kind,
           present=1,modified=excluded.modified,size_bytes=excluded.size_bytes""",
           (anime_id, str(parsed.path), kind, parsed.season, parsed.episode, parsed.kind, modified, file_info.st_size))
+        self.connection.execute('UPDATE media SET file_identity=?,episode_end=? WHERE path=?',(f'{file_info.st_dev}:{file_info.st_ino}' if file_info.st_ino else None,getattr(parsed,'episode_end',None),str(parsed.path)))
 
     def finish_scan(self):
-        self.connection.execute("DELETE FROM media WHERE present=0")
-        self.connection.execute("DELETE FROM anime WHERE NOT EXISTS(SELECT 1 FROM media WHERE media.anime_id=anime.id)")
+        # Missing sources are reversible; progress and identities are retained.
         self.connection.commit()
         from .requests_store import Requests
         Requests(self).reconcile_available()
@@ -603,14 +616,14 @@ class Database:
         self.connection.commit(); return bool(cursor.rowcount)
 
     def remove_from_collection(self, collection_id, anime_id):
-        key=self.entity_key_for_anime(anime_id);cursor=self.connection.execute("DELETE FROM collection_entries WHERE collection_id=? AND entity_key=?",(collection_id,key))
+        key=self.entity_key_for_anime(anime_id);cursor=self.connection.execute("DELETE FROM collection_entries WHERE collection_id=? AND entity_key IN (?,?)",(collection_id,key,f'local:{anime_id}'))
         if cursor.rowcount:
             self.connection.execute("UPDATE collections SET updated_at=CURRENT_TIMESTAMP WHERE id=?",(collection_id,))
         self.connection.commit(); return bool(cursor.rowcount)
 
     def anime_collection_ids(self, anime_id):
         key=self.entity_key_for_anime(anime_id)
-        return {row[0] for row in self.connection.execute("SELECT collection_id FROM collection_entries WHERE entity_key=?",(key,))}
+        return {row[0] for row in self.connection.execute("SELECT collection_id FROM collection_entries WHERE entity_key IN (?,?)",(key,f'local:{anime_id}'))}
 
     def add_remote_to_collection(self,collection_id,item):
         collection=self.collection(collection_id)
@@ -639,6 +652,8 @@ class Database:
             anime=self.anime(anime_id)
             if not anime:raise ValueError("Anime no longer exists.")
             key=self._entity_key(anime_id,anime["anilist_id"]);metadata=anime["metadata_json"] or "{}"
+            local_key=f'local:{anime_id}'
+            if self.connection.execute('SELECT 1 FROM manual_status WHERE scope=? AND entity_key=?',(scope,local_key)).fetchone():key=local_key
         elif item is not None:
             if scope=="restricted" and item.get("isAdult") is not True:raise ValueError("Restricted statuses only accept titles explicitly marked adult by AniList.")
             if scope=="normal" and item.get("isAdult") is True:raise ValueError("Adult-title statuses belong in Restricted Archive.")
@@ -657,7 +672,8 @@ class Database:
         if anime_id is not None:
             row=self.anime(anime_id)
             if row and row["anilist_id"] is not None:key=self._entity_key(anilist_id=row["anilist_id"])
-        row=self.connection.execute("SELECT status FROM manual_status WHERE scope=? AND entity_key=?",(scope,key)).fetchone()
+        local_key=f'local:{anime_id}' if anime_id is not None else key
+        row=self.connection.execute('SELECT status FROM manual_status WHERE scope=? AND entity_key IN (?,?) ORDER BY (entity_key=?) DESC,updated_at DESC LIMIT 1',(scope,key,local_key,local_key)).fetchone()
         return row[0] if row else None
 
     def status_entries(self,status,scope="normal"):
@@ -851,7 +867,7 @@ class Database:
         self.connection.commit()
 
     def next_unwatched(self, anime_id):
-        return self.connection.execute("""SELECT * FROM media WHERE anime_id=? AND kind='episode' AND watched=0
+        return self.connection.execute("""SELECT * FROM media WHERE anime_id=? AND kind='episode' AND present=1 AND watched=0
           ORDER BY COALESCE(season,999), COALESCE(episode,999), path COLLATE NOCASE LIMIT 1""", (anime_id,)).fetchone()
 
     def media_by_id(self, media_id):
@@ -863,7 +879,7 @@ class Database:
         self.connection.commit()
 
     def adjacent_episode(self, anime_id, media_id, offset):
-        rows=self.connection.execute("""SELECT * FROM media WHERE anime_id=? AND kind='episode'
+        rows=self.connection.execute("""SELECT * FROM media WHERE anime_id=? AND kind='episode' AND present=1
           ORDER BY COALESCE(season,999),COALESCE(episode,999),path COLLATE NOCASE""",(anime_id,)).fetchall()
         ids=[row["id"] for row in rows]
         if media_id not in ids: return None

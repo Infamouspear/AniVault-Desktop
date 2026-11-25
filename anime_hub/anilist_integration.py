@@ -109,6 +109,8 @@ def fetch_anime_relations(media_ids) -> list[dict]:
     # Compatibility with the prior single-media response also keeps test and
     # alternate GraphQL adapters usable while production uses aliased fields.
     if "Media" in payload and selected: payload={"m0":payload["Media"]}
+    if any(f'm{index}' not in payload or payload[f'm{index}'] is None for index in range(len(selected))):
+        raise RuntimeError('AniList returned incomplete relationship data; cached groups were retained.')
     for index,source_id in enumerate(selected):
         media=payload.get(f"m{index}") or {}
         for edge in ((media.get("relations") or {}).get("edges") or []):

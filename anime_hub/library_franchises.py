@@ -45,16 +45,22 @@ def build_franchises(rows,relations=None,scope='normal'):
     def root(identifier):
         while parent[identifier]!=identifier:parent[identifier]=parent[parent[identifier]];identifier=parent[identifier]
         return identifier
+    # Known normal intermediate entries may connect two owned seasons even when
+    # the intermediate season is not local. No guessed title links or crawling.
+    allowed_remote={int(node['id']) for _,relation,node in raw if relation in LINKS and isinstance(node.get('id'),int) and node.get('type')=='ANIME' and node.get('isAdult') is (scope=='restricted')}
+    parent.update({identifier:identifier for identifier in allowed_remote if identifier not in parent})
     seen=set()
     for source,relation,node in raw:
         target=node.get('id')
         try:target=int(target)
         except (ValueError,TypeError):continue
-        if relation not in LINKS or node.get('type')!='ANIME' or not target or int(target) not in by_id or source==int(target):continue
+        if relation not in LINKS or node.get('type')!='ANIME' or target not in parent or source not in parent or source==target:continue
         if node.get('isAdult') is True and scope=='normal':continue
-        key=(source,int(target),relation)
+        key=(source,target,relation)
         if key in seen:continue
-        seen.add(key);edges.append(key);parent[root(source)]=root(int(target))
+        seen.add(key)
+        if source in by_id and target in by_id:edges.append(key)
+        parent[root(source)]=root(target)
     components={}
     for identifier in by_id:components.setdefault(root(identifier),[]).append(identifier)
     groups=[]
@@ -126,7 +132,7 @@ class LibraryFranchiseMixin:
         self._library_relation_path=APP_DIR/'cache'/'library_relations.json';self._library_relation_data={};self._library_relation_dates={};self._library_relation_revision=0;self._library_relations_loading=False
         try:
             data=json.loads(self._library_relation_path.read_text())
-            relations=data.get('relations');timestamps=data.get('timestamps')
+            relations=data.get('relations');timestamps=data.get('timestamps') if data.get('schema')==2 else {}
             self._library_relation_data=relations if isinstance(relations,dict) else {};self._library_relation_dates={key:float(value) for key,value in (timestamps or {}).items() if isinstance(value,(int,float))}
         except (OSError,ValueError,TypeError,AttributeError):pass
 
@@ -154,11 +160,11 @@ class LibraryFranchiseMixin:
             self._library_relations_loading=False
             if self._closing:return
             for identifier in batch:
-                self._library_relation_data[str(identifier)]=[item for item in items if item.get('sourceAniListId')==identifier and item.get('type')=='ANIME'];self._library_relation_dates[str(identifier)]=time.time()
+                self._library_relation_data[str(identifier)]=[item for item in items if item.get('sourceAniListId')==identifier and item.get('type')=='ANIME' and item.get('isAdult') is not True];self._library_relation_dates[str(identifier)]=time.time()
             self._library_relation_revision+=1;self._library_franchise_cache={}
             self._relationship_notice(f'Updated franchise groups: {len(self._library_franchises())}. Active filters still apply; unrelated titles remain individual.')
             self._library_relation_path.parent.mkdir(parents=True,exist_ok=True);temporary=self._library_relation_path.with_suffix('.tmp')
-            try:temporary.write_text(json.dumps({'relations':self._library_relation_data,'timestamps':self._library_relation_dates}));temporary.replace(self._library_relation_path)
+            try:temporary.write_text(json.dumps({'schema':2,'relations':self._library_relation_data,'timestamps':self._library_relation_dates}));temporary.replace(self._library_relation_path)
             except OSError as exc:_append_playback_log(f'LibraryRelations cache_error={type(exc).__name__}')
             _append_playback_log(f'LibraryRelations sources={len(batch)} edges={len(items)} groups={len(self._library_franchises())}')
             active=self.stack.currentWidget();normal_return=self._normal_return_state[0] if self._normal_return_state else None
@@ -174,7 +180,8 @@ class LibraryFranchiseMixin:
                     rebuild=getattr(page,'refresh_franchises',None)
                     if rebuild:rebuild()
                 else:self.statusBar().showMessage('Franchise relationships updated. Reopen All Anime to see groups.',5000)
-                QTimer.singleShot(500,lambda:self._request_library_relations() if not self._closing and self.current_view=='library' and self.active_nav_key=='all' else None)
+            # Complete the queue even when the user leaves All Anime between batches.
+            QTimer.singleShot(500,lambda:self._request_library_relations() if not self._closing else None)
         def failed(exc):
             self._library_relations_loading=False
             self._relationship_notice('Could not refresh relationships. Existing groups are kept. Try again later.')

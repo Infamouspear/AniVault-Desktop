@@ -44,7 +44,7 @@ TRAILING_DESCRIPTOR = re.compile(
     r"(?:\s*[-–—:]?\s*)\b(?:complete(?:\s+(?:series|collection|edition))?|batch)\b\s*$", re.I
 )
 GROUP_PREFIX = re.compile(r"^\s*\[([^\]]+)\]\s*")
-SEASON_RE = re.compile(r"\(?(?:season|s)\s*0*(\d+)(?:\s*(?:pt|part)\s*0*(\d+))?\)?", re.I)
+SEASON_RE = re.compile(r"(?<![A-Za-z0-9])\(?(?:season|s)\s*0*(\d+)(?:\s*(?:pt|part)\s*0*(\d+))?\)?", re.I)
 EPISODE_PATTERNS = (
     re.compile(r"\bS(\d{1,2})E(\d{1,4})(?:v\d+)?\b", re.I),
     re.compile(r"\bEpisode\s*0*(\d{1,4})(?:v\d+)?\b", re.I),
@@ -61,6 +61,7 @@ class ParsedTitle:
     part: int | None = None
     year: int | None = None
     season_explicit: bool = False
+    format_hint: str | None = None
 
 
 @dataclass(slots=True)
@@ -70,6 +71,7 @@ class ParsedFile:
     season: int | None = None
     episode: int | None = None
     reason: str = ""
+    episode_end: int | None = None
 
 
 def _tidy(value: str) -> str:
@@ -96,7 +98,7 @@ def _tidy(value: str) -> str:
 STRUCTURAL_FOLDER = re.compile(
     r"^(?:(?:\d{1,4})\s*[-–—]\s*(?:\d{1,4})|(?:19|20)\d{2}|"
     r"(?:season|series|part|cour)\s*\d+(?:\s*(?:part|pt)\s*\d+)?|s\d{1,2}|"
-    r"episodes?|eps?|extras?|specials?|sps?|scans?|artworks?|booklets?|"
+    r"ovas?|oads?|movies?|episodes?|eps?|extras?|specials?|sps?|scans?|artworks?|booklets?|"
     r"audio\s*cds?|drama\s*cds?|osts?|bonus(?:\s*content)?)$", re.I
 )
 
@@ -122,6 +124,8 @@ def parse_title(folder_name: str, parent_names: tuple[str, ...] = ()) -> ParsedT
     season_match = SEASON_RE.search(raw)
     season = int(season_match.group(1)) if season_match else 1
     part = int(season_match.group(2)) if season_match and season_match.group(2) else None
+    part_match=re.search(r'\b(?:part|cour|pt)\s*0*(\d+)',raw,re.I)
+    if part_match:part=int(part_match.group(1))
     year_match = re.search(r"(?:\(|\b)((?:19|20)\d{2})(?:\)|\b)", raw)
     year = int(year_match.group(1)) if year_match else None
 
@@ -140,7 +144,7 @@ def parse_title(folder_name: str, parent_names: tuple[str, ...] = ()) -> ParsedT
     alternate = _tidy(before_english)
     title = _tidy(english) if english else alternate
     if not is_meaningful_title(title):
-        cleaned_parents = [_tidy(name) for name in parent_names]
+        cleaned_parents = [parse_title(name).title for name in parent_names if not is_structural_folder(name)]
         title = next((name for name in cleaned_parents if is_meaningful_title(name)), "")
     if not is_meaningful_title(title):
         title = next((name.strip() for name in parent_names if is_meaningful_title(name)), "")
@@ -148,9 +152,12 @@ def parse_title(folder_name: str, parent_names: tuple[str, ...] = ()) -> ParsedT
         title = folder_name.strip()
     if not title.strip():
         title = "Unknown Anime"
+    hint_raw=re.sub(r'\([^)]*(?:complete|series|s\d+\s*-)[^)]*\)', '', raw, flags=re.I)
+    hint='MOVIE' if re.search(r'\bmovies?\b',hint_raw,re.I) else 'OVA' if re.search(r'\b(?:ova|oad)s?\b',hint_raw,re.I) else 'SPECIAL' if re.search(r'\b(?:specials?|sps?)\b',hint_raw,re.I) else None
+    if hint and is_structural_folder(folder_name) and title!='Unknown Anime':title+=' '+('OVAs' if hint=='OVA' else 'Movies' if hint=='MOVIE' else 'Specials')
     return ParsedTitle(title=title, alternate_title=alternate if english else "",
                        release_group=group, season=season, part=part, year=year,
-                       season_explicit=season_match is not None)
+                       season_explicit=season_match is not None, format_hint=hint)
 
 
 def classify_file(path: Path, release_season: int = 1) -> ParsedFile:
@@ -165,7 +172,11 @@ def classify_file(path: Path, release_season: int = 1) -> ParsedFile:
         return ParsedFile(path, "audio", reason="audio extension")
     if suffix not in VIDEO_EXTS:
         return ParsedFile(path, "other", reason="unsupported/non-media extension")
-    if in_extra_dir or SPECIAL_CODE.search(path.stem) or SPECIAL_WORDS.search(text):
+    episode_match=EPISODE_PATTERNS[0].search(path.stem)
+    if episode_match and not in_extra_dir and not SPECIAL_CODE.search(path.stem):
+        end=re.match(r'[-~+]E?(\d{1,4})',path.stem[episode_match.end():],re.I)
+        return ParsedFile(path,'episode',int(episode_match.group(1)),int(episode_match.group(2)),'SxxExx pattern',int(end.group(1)) if end else None)
+    if in_extra_dir or SPECIAL_CODE.search(path.stem) or SPECIAL_WORDS.search(path.stem):
         evidence = "recognized extras folder" if in_extra_dir else "recognized special marker in name"
         return ParsedFile(path, "special", reason=evidence)
 
