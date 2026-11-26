@@ -183,12 +183,12 @@ def _finish(db,job,status,outcome,next_at=0,failed_requests=0):
       (status,outcome,next_at,failed_requests,time.time(),job['scope'],job['target'],job['operation'],job['revision']))
 
 
-def process(db,*,lookup=None,scheduler=None,should_cancel=lambda:False,status=lambda _:None,max_jobs=8,include_artwork=True):
+def process(db,*,lookup=None,scheduler=None,should_cancel=lambda:False,status=lambda _:None,max_jobs=8,include_artwork=True,max_seconds=20):
     from .metadata import AniListClient,lookup_anilist,fetch_anilist_id,cache_artwork
     lookup=lookup or lookup_anilist;scheduler=scheduler or get_scheduler();recover(db)
     client=AniListClient(scheduler=scheduler,max_retries=0,wait=False,origin='scanner',should_cancel=should_cancel,status_callback=status)
     applied=processed=0;started=time.monotonic()
-    while processed<max_jobs and not should_cancel() and time.monotonic()-started<20:
+    while processed<max_jobs and not should_cancel() and time.monotonic()-started<max_seconds:
         if db.setting('metadata_paused','0')=='1':break
         job=_claim(db,scheduler.clock())
         if not job:break

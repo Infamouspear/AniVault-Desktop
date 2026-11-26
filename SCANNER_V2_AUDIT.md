@@ -59,9 +59,10 @@ absent metadata into a presumed official identity.
 | Standard-library active sources | 127 | 127 |
 | Standard-library regular episodes | 1,510 | 1,415 |
 | Standard-library items in the ambiguous review count | 13 | 15 |
-| Mocked AniList requests, initial scan | 21 | 16 |
+| Mocked AniList requests, initial scan | 21 | 21 |
 | Mocked requests, immediate unchanged rescan | 0 | 0 |
 | Mocked requests, unchanged rescan after process restart | 0 | 0 |
+| Mocked requests for one unresolved release on successive days | 2, 2, 2 | 2, 2, 0 |
 
 The preview found no additional source retirement in the current library. The
 Freezing container was already retired, with both children active and 12 regular
@@ -77,5 +78,5 @@ and advanced playback in both files.
 
 The v1.9.4 Windows x64 installer passed the packaged TLS startup and bundle
 integrity checks. SHA-256:
-E2CCB98B84804BCE2157D33F7ADCCEF9B6A0ECD1F073589772EBD3A31C5C9E87.
+07FD134CCAC8FFC6BEA18A08947D8105E20F2A3704B93210C172D86DF0E20492.
 GitHub v1.9.3 remains the baseline release. The candidate was built locally.

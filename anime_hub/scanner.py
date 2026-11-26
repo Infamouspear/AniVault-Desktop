@@ -180,10 +180,12 @@ def _scan(root: Path, db, progress=lambda *_: None, diagnostics_path: Path | Non
         # Shared OVA/movie/special folders retain their stable parent record.
         # Distinct file identities are reviewed separately instead of borrowing one show's metadata.
         mixed=bool(parsed_title.format_hint in {'MOVIE','OVA','SPECIAL'} and len(primary)>1)
-        if mixed:
-            for candidate in primary:
-                media=db.connection.execute('SELECT id FROM media WHERE path=?',(str(candidate.path),)).fetchone()
-                db.connection.execute("INSERT INTO scan_file_matches(media_id,parsed_title,format_hint) VALUES(?,?,?) ON CONFLICT(media_id) DO UPDATE SET parsed_title=excluded.parsed_title,format_hint=excluded.format_hint",(media['id'],state.file_title(candidate.path,parsed_title.title),parsed_title.format_hint))
+        file_matches = [(candidate, parsed_title.format_hint) for candidate in primary] if mixed else []
+        if parsed_title.format_hint == 'MOVIE':
+            file_matches.extend((item, 'OVA') for item in videos if item.kind == 'ova')
+        for candidate, format_hint in file_matches:
+            media=db.connection.execute('SELECT id FROM media WHERE path=?',(str(candidate.path),)).fetchone()
+            db.connection.execute("INSERT INTO scan_file_matches(media_id,parsed_title,format_hint) VALUES(?,?,?) ON CONFLICT(media_id) DO UPDATE SET parsed_title=excluded.parsed_title,format_hint=excluded.format_hint",(media['id'],state.file_title(candidate.path,parsed_title.title),format_hint))
         saved = db.anime(anime_id)
         saved_metadata = json.loads(saved["metadata_json"] or "{}")
         matched_title = (saved_metadata.get("title", {}).get("english") or
@@ -235,7 +237,7 @@ def _scan(root: Path, db, progress=lambda *_: None, diagnostics_path: Path | Non
     jobs.enqueue_existing(db,set(touched))
     metadata_status(f'Local Library Scan completed: {len(roots)} roots indexed. '+jobs.progress_text(db))
     if match_online:
-        jobs.process(db,lookup=lookup_anilist,scheduler=scheduler,should_cancel=should_cancel,status=metadata_status,max_jobs=100000,include_artwork=False)
+        jobs.process(db,lookup=lookup_anilist,scheduler=scheduler,should_cancel=should_cancel,status=metadata_status,max_jobs=100000,include_artwork=False,max_seconds=120)
         # Standalone callers retain identification compatibility; desktop indexing
         # uses match_online=False and a separate persistent metadata worker.
     for row in db.anime_list():
