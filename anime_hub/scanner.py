@@ -153,6 +153,16 @@ def _scan(root: Path, db, progress=lambda *_: None, diagnostics_path: Path | Non
             in_extras=any(extra_folder_kind(part) for part in nested_parts)
             clearly_extra=in_extras or bool(NON_PRIMARY_VIDEO.search(item.path.stem))
             if not clearly_extra: primary.append(item)
+        if len(primary) == 1:
+            item = primary[0]
+            if (item.reason == "bare numbered-video fallback"
+                    and parse_title(item.path.stem).title.casefold() == parsed_title.title.casefold()):
+                item.episode = 1
+                item.reason = "single video whose name matches the release"
+        if (parsed_title.format_hint is None and primary and all(
+                item.kind == "special" and re.search(r"\b(?:OVA|OAD)\b", item.path.stem, re.I)
+                for item in primary)):
+            parsed_title.format_hint = "OVA"
         if not any(item.kind == "episode" for item in parsed_media):
             # A named movie or OVA may be the primary playable item. Multiple
             # unnumbered videos in an ordinary series need review.

@@ -78,5 +78,19 @@ and advanced playback in both files.
 
 The v1.9.4 Windows x64 installer passed the packaged TLS startup and bundle
 integrity checks. SHA-256:
-07FD134CCAC8FFC6BEA18A08947D8105E20F2A3704B93210C172D86DF0E20492.
+0BA265621E9DFCF70377B03A6A3F0474D52840E4FBE2BB2269A6F3A2D974978B.
 GitHub v1.9.3 remains the baseline release. The candidate was built locally.
+
+## Regression status
+
+The full Windows run on an intermediate revision finished with 538 passing
+and six failing tests. The six cases passed individually or in targeted
+groups after the final fixes. The large-file LAN check used an NTFS sparse
+fixture for its 2 GiB test file. The download destination race passed in
+isolation on both the candidate and v1.9.3.
+
+The core scanner, parser, reconciliation, and media-count group passed all
+48 tests before the last standalone-release compatibility change. The final
+source passed the 10-case scanner, movie and Initial D compatibility group.
+An isolated manga library and reader workflow also passed. Full-suite
+acceptance of the exact final commit remains pending.
