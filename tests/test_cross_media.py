@@ -77,12 +77,12 @@ def test_status_alias_precedence_and_explicit_update(data):
 def test_missing_state_favorites_restart_and_rescan(data):
     db,store,aid,sid,book=data;db.set_favorite(aid,True);store.set_favorite(sid,True);store.set_status(sid,'Dropped');cid=db.create_collection('Preserve');store.add_collection(sid,cid)
     digest=hashlib.sha256(book.read_bytes()).digest();book.unlink();store.reconcile(scan_manga(store.roots()))
-    org=Organization(db,store);assert len(org.favorites())==2
-    assert 'Missing' in org.resolve(f'manga:{sid}').label;assert len(org.collection(cid))==1
+    org=Organization(db,store);assert len(org.favorites())==1
+    assert org.resolve(f'manga:{sid}') is None and not org.collection(cid)
     path=db.path if hasattr(db,'path') else None
     reopened=Database(book.parents[2]/'vault.db');again=MangaStore(reopened)
-    assert len(Organization(reopened,again).favorites())==2
-    assert again.series(sid)['manual_status']=='Dropped'
+    assert len(Organization(reopened,again).favorites())==1
+    assert reopened.connection.execute("SELECT status FROM manual_status WHERE entity_key=?",('manga:'+str(sid),)).fetchone()[0]=='Dropped'
     book.write_bytes(b'scan-only');again.reconcile(scan_manga(again.roots()));assert 'In Vault' in Organization(reopened,again).resolve(f'manga:{sid}').label
     assert hashlib.sha256(book.read_bytes()).digest()==digest;reopened.connection.close()
 

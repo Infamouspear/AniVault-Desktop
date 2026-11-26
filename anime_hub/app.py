@@ -197,6 +197,7 @@ class ScanWorker(QThread):
     progress = Signal(int, int, str)
     status = Signal(str)
     finished_count = Signal(int)
+    incomplete = Signal()
     failed = Signal(str)
     def __init__(self, root, db_path):
         super().__init__(); self.root=Path(root); self.db_path=db_path
@@ -208,7 +209,8 @@ class ScanWorker(QThread):
                        self.db_path.parent/"scanner_diagnostics.log", self.status.emit,
                        self.isInterruptionRequested,match_online=False)
             _append_playback_log(f"ScannerComplete elapsed_ms={(time.perf_counter()-started)*1000:.0f} releases={count} cancelled={self.isInterruptionRequested()}")
-            self.finished_count.emit(count)
+            if db.last_scan_completed:self.finished_count.emit(count)
+            else:self.incomplete.emit()
         except Exception:
             details=traceback.format_exc()
             _append_crash_log("Background scan exception\n"+details)
@@ -3055,6 +3057,7 @@ class Window(MetadataQueueMixin,ScannerReviewMixin,AiringUpdatesMixin,HubMixin,L
         self.scan_worker.progress.connect(lambda a,b,c:self.statusBar().showMessage(f"Local Library Scan: {a}/{b} roots indexed · {c}"))
         self.scan_worker.status.connect(self.statusBar().showMessage)
         self.scan_worker.finished_count.connect(self._scan_completed)
+        self.scan_worker.incomplete.connect(self._scan_incomplete)
         self.scan_worker.failed.connect(self._scan_failed)
         self.scan_worker.finished.connect(self._scan_thread_finished)
         self.scan_worker.start()
@@ -3064,11 +3067,18 @@ class Window(MetadataQueueMixin,ScannerReviewMixin,AiringUpdatesMixin,HubMixin,L
             self.local_scan_status=f'Completed: {count} roots indexed'
             self.statusBar().showMessage(f'Local Library Scan completed: {count} releases. Metadata matching continues separately.')
             self._library_cache_dirty=True
+            self._cancel_hub_hover();self._unpin_hub_selection()
+            if hasattr(self,'context_rail'):self.context_rail.hide()
             self.requests_changed.emit()
             self.show_library()
             self.resume_metadata_jobs()
 
+    def _scan_incomplete(self):
+        self.local_scan_status='Incomplete: library retained'
+        if not self._closing:self.statusBar().showMessage('Scan incomplete or source unavailable; existing library retained. Retry when storage is accessible.')
+
     def _scan_failed(self, details):
+        self.local_scan_status="Failed: library retained"
         if self._closing:return
         self.statusBar().showMessage("Library scan failed — details saved to crash.log")
         AniVaultDialog.alert(self,"Scan Failed",details[-2000:])

@@ -172,6 +172,9 @@ def classify_file(path: Path, release_season: int = 1) -> ParsedFile:
         return ParsedFile(path, "audio", reason="audio extension")
     if suffix not in VIDEO_EXTS:
         return ParsedFile(path, "other", reason="unsupported/non-media extension")
+    # Credit sequences can contain episode numbers; classify before episode patterns.
+    if re.fullmatch(r'(?i)NC|NCOP|NCED|openings?|endings?',path.parent.name) or re.match(r'(?i)^(?:OP|ED|NCOP|NCED)(?:\d+)?(?:[ ._-]|$)',path.stem):
+        return ParsedFile(path,'special',reason='opening/ending or credit sequence')
     episode_match=EPISODE_PATTERNS[0].search(path.stem)
     if episode_match and not in_extra_dir and not SPECIAL_CODE.search(path.stem):
         end=re.match(r'[-~+]E?(\d{1,4})',path.stem[episode_match.end():],re.I)

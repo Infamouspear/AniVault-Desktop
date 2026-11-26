@@ -85,15 +85,15 @@ def readable_label(name,volume,chapter):
 
 def scan_manga(roots, cancelled=lambda:False):
     """Enumerate files only; never open an archive or decode a cover during scan."""
-    result={'series':{},'roots_done':[],'errors':[]};seen=set()
+    result={'series':{},'roots_done':[],'errors':[],'cancelled':False};seen=set()
     for root in roots:
         base=Path(root['path']);scope=root['scope'];root_id=root['id']
-        if cancelled():break
+        if cancelled():result['cancelled']=True;break
         if not base.is_dir():result['errors'].append(f'Root unavailable: {base}');continue
         errors=[]
         def error(exc):errors.append(f'{type(exc).__name__}: {exc}')
         for folder,dirs,files in os.walk(base,followlinks=False,onerror=error):
-            if cancelled():return result
+            if cancelled():result['cancelled']=True;return result
             directory=Path(folder)
             dirs[:]=sorted([d for d in dirs if not d.startswith('.') and not (directory/d).is_symlink()],key=natural_key)
             files=sorted([f for f in files if not f.startswith('.') and not (directory/f).is_symlink()],key=lambda n:(natural_key(n),n))
@@ -163,6 +163,9 @@ class MangaStore:
     def disable_root(self,rid):self.connection.execute('UPDATE manga_roots SET enabled=0 WHERE id=?',(rid,));self.connection.commit()
     def reconcile(self,result):
         new=changed=removed=0
+        if result.get('cancelled'):return {'series':0,'items':0,'new':0,'changed':0,'removed':0,'errors':len(result['errors']),'preserved_group_conflicts':0}
+        from .scan_state import backup
+        if result['roots_done']:backup(self.db,'before-manga-reconciliation')
         with self.connection:
             before={r['path_key']:dict(r) for r in self.connection.execute('SELECT * FROM manga_items')}
             before_series_paths={}
@@ -242,7 +245,7 @@ class MangaStore:
           (SELECT COUNT(DISTINCT volume) FROM manga_items WHERE series_id=s.id AND present=1 AND volume IS NOT NULL) volume_count,
           (SELECT COUNT(DISTINCT chapter) FROM manga_items WHERE series_id=s.id AND present=1 AND chapter IS NOT NULL) chapter_count
           FROM manga_series s JOIN manga_roots r ON r.id=s.root_id
-          LEFT JOIN manga_items i ON i.series_id=s.id
+          LEFT JOIN manga_items i ON i.series_id=s.id AND i.present=1
           LEFT JOIN manga_reader_state p ON p.identity=i.reader_identity
           LEFT JOIN manual_status ms ON ms.scope=s.scope AND ms.entity_key='manga:'||s.id
           WHERE '''+' AND '.join(conditions)+' GROUP BY s.id HAVING COUNT(i.id)>0 ORDER BY s.title COLLATE NOCASE',params).fetchall()

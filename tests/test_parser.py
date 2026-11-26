@@ -53,15 +53,15 @@ class ParserTests(unittest.TestCase):
             found=list(discover_series_roots(root))
             self.assertEqual([(item.category,item.path) for item in found],[("Other",series)])
 
-    def test_initial_d_complete_bundle_stays_one_parent(self):
+    def test_initial_d_complete_bundle_identifies_individual_child_releases(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp); bundle=root/"[Judas] Initial D (Complete Series + Movies) [BD 1080p]"
             for number,stage in enumerate(("First Stage","Second Stage","Extra Stage","Third Stage"),1):
                 child=bundle/f"[Judas] {number:02} - Initial D {stage}"; child.mkdir(parents=True)
                 (child/f"Initial D {stage} - 01.mkv").touch()
             child_log=[]; found=list(discover_series_roots(root,child_log))
-            self.assertEqual(len(found),1); self.assertEqual(found[0].path,bundle)
-            self.assertEqual(len(found[0].child_folders),4)
+            self.assertEqual(len(found),4); self.assertTrue(all(item.path.parent==bundle for item in found))
+            self.assertTrue(all(not item.child_folders for item in found))
             self.assertTrue(all(str(bundle) in line for line in child_log))
 
     def test_flat_extras_remain_attached_to_series(self):

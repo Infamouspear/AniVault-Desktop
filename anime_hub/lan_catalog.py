@@ -34,7 +34,7 @@ class Catalog:
 
     def anime(self, identity):
         row = self.db.anime(identity)
-        if row is None or self.db.anime_scope(row) != self.scope:
+        if row is None or not row['active'] or self.db.anime_scope(row) != self.scope:
             raise APIError(404, 'title_not_found')
         return dict(row)
 

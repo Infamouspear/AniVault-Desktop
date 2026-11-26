@@ -25,7 +25,7 @@ def migrate(db):
 
 
 def fingerprint(payload,files):
-    value={**payload,'files':sorted((r['id'],r['path'],r['season'],r['episode'],r['size_bytes'],r['modified'],r['present']) for r in files)}
+    value={**payload,'files':sorted((r['id'],r['path'],r['season'],r['episode'],r['size_bytes'],(r['file_identity'] if 'file_identity' in r.keys() and r['file_identity'] else r['modified']),r['present']) for r in files)}
     return hashlib.sha256(json.dumps(value,sort_keys=True).encode()).hexdigest()
 
 
@@ -39,7 +39,7 @@ def enqueue(db,anime_id,payload,files,*,media_id=None,operation='identify',now=N
         if row and row[0]:return False
     target=('media:'+str(media_id)) if media_id else 'anime:'+str(anime_id);stamp=fingerprint(payload,files)
     previous=db.connection.execute("SELECT * FROM metadata_jobs WHERE scope='normal' AND target=? AND operation=?",(target,operation)).fetchone()
-    if previous and previous['fingerprint']==stamp:return False
+    if previous and previous['fingerprint']==stamp and previous['anime_id']==anime_id and previous['outcome']!='retired':return False
     db.connection.execute("""INSERT INTO metadata_jobs(scope,target,operation,anime_id,media_id,fingerprint,payload,updated)
       VALUES('normal',?,?,?,?,?,?,?) ON CONFLICT(scope,target,operation) DO UPDATE SET fingerprint=excluded.fingerprint,payload=excluded.payload,
       anime_id=excluded.anime_id,media_id=excluded.media_id,state='pending',outcome='source_changed',next_at=0,revision=metadata_jobs.revision+1,owner=NULL,lease_until=0,updated=excluded.updated""",
@@ -68,6 +68,7 @@ def independent_file(path,root):
     if SPECIAL_WORDS.search(path.stem) or SPECIAL_CODE.search(path.stem) or __import__('re').search(r'\bmovie\b',path.stem,__import__('re').I):return True
     try:parents=path.relative_to(root).parts[:-1]
     except ValueError:parents=()
+    if any(__import__('re').fullmatch(r'NC|NCOP|NCED|openings?|endings?',name,__import__('re').I) for name in parents):return False
     if any(__import__('re').fullmatch(r'(?:ovas?|oads?|movies?|specials?|sps?|extras?)',name,__import__('re').I) for name in parents):return True
     try:relative=path.relative_to(root)
     except ValueError:relative=Path(path.name)
@@ -84,14 +85,15 @@ def enqueue_existing(db,identifiers=None):
         saved=state.source_state(db,row['id']);item=state.safe_json(row['metadata_json'])
         if not isinstance(item,dict):item={}
         file_entries=db.connection.execute('SELECT f.media_id FROM scan_file_matches f JOIN media m ON m.id=f.media_id WHERE m.anime_id=? AND m.present=1',(row['id'],)).fetchall()
-        mixed=bool(file_entries)
+        mixed=bool(file_entries) and saved['format_hint'] in {'MOVIE','OVA','SPECIAL'}
         primary_movie_ids={r['id'] for r in files if r['kind']=='episode' and Path(r['path']).parent==Path(row['root_path'])} if saved['format_hint']=='MOVIE' else set()
         if len(primary_movie_ids)==1:mixed=False
         if not mixed and not row['anilist_id'] and not saved['locked']:
             added+=enqueue(db,row['id'],{'title':row['parsed_search_title'] or row['title'],'season':row['detected_season'],'year':row['detected_year'],'alternates':[v for v in (row['alt_title'],) if v],'count':row['episode_count'],'format':saved['format_hint'],'part':saved['part']},files)
         elif row['anilist_id']:
+            from .reconciliation import artwork_status
             if not any((item.get('title') or {}).values()):added+=enqueue(db,row['id'],{'id':row['anilist_id']},[],operation='media')
-            elif ((item.get('coverImage') or {}).get('extraLarge') or (item.get('coverImage') or {}).get('large')) and (not item.get('cover_path') or not Path(item['cover_path']).is_file()):added+=enqueue(db,row['id'],{'id':row['anilist_id']},[],operation='artwork')
+            elif ((item.get('coverImage') or {}).get('extraLarge') or (item.get('coverImage') or {}).get('large')) and artwork_status(item) not in {'Available','Manual artwork','Manual artwork needs review'}:added+=enqueue(db,row['id'],{'id':row['anilist_id'],'artwork_revision':artwork_status(item)},[],operation='artwork')
         if file_entries:
             for file in db.connection.execute('SELECT f.* FROM scan_file_matches f JOIN media m ON f.media_id=m.id WHERE m.anime_id=? AND m.present=1 AND f.locked=0 AND f.anilist_id IS NULL',(row['id'],)).fetchall():
                 source_file=next((r for r in files if r['id']==file['media_id']),None)
@@ -168,7 +170,7 @@ def _claim(db,now):
 
 def _valid(db,job):
     current=db.connection.execute('SELECT * FROM metadata_jobs WHERE scope=? AND target=? AND operation=?',(job['scope'],job['target'],job['operation'])).fetchone()
-    if not current or current['revision']!=job['revision'] or db.anime_scope(job['anime_id'])!='normal':return False
+    if not current or current['revision']!=job['revision'] or not db.anime(job['anime_id']) or not db.anime(job['anime_id'])['active'] or db.anime_scope(job['anime_id'])!='normal':return False
     if job['media_id']:
         source=db.connection.execute('SELECT f.locked,m.anime_id FROM scan_file_matches f JOIN media m ON m.id=f.media_id WHERE f.media_id=?',(job['media_id'],)).fetchone()
         return bool(source and not source[0] and source['anime_id']==job['anime_id'])

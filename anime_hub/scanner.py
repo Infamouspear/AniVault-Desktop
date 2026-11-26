@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import os
 import hashlib
 import json
 from dataclasses import dataclass
@@ -47,46 +48,27 @@ def _is_series_bundle(folder: Path, meaningful_children: list[Path]) -> bool:
 
 
 def discover_series_roots(root: Path, child_log: list[str] | None = None):
-    """Find meaningful series roots; structural children remain under parents."""
     child_log = child_log if child_log is not None else []
+    def descend(folder,category):
+        children=_media_children(folder)
+        meaningful=[p for p in children if not is_structural_folder(p.name)]
+        seasons=[p for p in children if re.fullmatch(r'(?i)(?:season|s)\s*0*\d+(?:\s+part\s*\d+)?',p.name)]
+        direct=any(p.is_file() and p.suffix.lower() in VIDEO_EXTS for p in folder.iterdir())
+        if not direct and (len(meaningful)>1 or len(seasons)>1 or (len(meaningful)==1 and BUNDLE_MARKER.search(folder.name))):
+            child_log.append(f'CONTAINER: {folder}')
+            for child in children:
+                if child in meaningful or child in seasons:
+                    yield from descend(child,category)
+                else:
+                    # Shared extras remain a reviewable source, never borrowed by a season.
+                    yield SeriesRoot(category,child)
+        else:
+            yield SeriesRoot(category,folder,tuple(p for p in children if is_structural_folder(p.name)))
     for first in root.iterdir():
-        if not first.is_dir():
-            continue
+        if not first.is_dir() or not contains_media(first):continue
         if first.name.casefold() in CATEGORY_NAMES:
-            for series in _media_children(first):
-                if is_structural_folder(series.name):
-                    # There is no meaningful parent below the category. Keep an
-                    # unresolved series so its media never silently disappears.
-                    child_log.append(f"UNRESOLVED STRUCTURAL ROOT: {series}")
-                for nested in series.rglob("*"):
-                    if nested.is_dir() and is_structural_folder(nested.name):
-                        child_log.append(f"CHILD/BATCH: {nested} -> {series}")
-                children=_media_children(series)
-                releases=[child for child in children if parse_title(child.name).season_explicit or parse_title(child.name).format_hint in {'MOVIE','OVA'}]
-                if len(releases)>1 and not any(f.is_file() and f.suffix.lower() in VIDEO_EXTS for f in series.iterdir()):
-                    for release in children:yield SeriesRoot(first.name.title(),release)
-                else:yield SeriesRoot(first.name.title(), series)
-            continue
-        if contains_media(first):
-            child_releases = _media_children(first)
-            direct_media = any(p.is_file() and p.suffix.lower() in VIDEO_EXTS for p in first.iterdir())
-            meaningful_children = [p for p in child_releases if not is_structural_folder(p.name)]
-            structural_children = [p for p in child_releases if is_structural_folder(p.name)]
-            # A loose folder with several meaningful show folders is a container
-            # (for example "corrupted"). Batch/season children instead prove the
-            # loose folder itself is the series root.
-            if (len(meaningful_children) > 1 and not direct_media
-                    and not _is_series_bundle(first,meaningful_children)):
-                for release in child_releases:
-                    for nested in release.rglob("*"):
-                        if nested.is_dir() and is_structural_folder(nested.name):
-                            child_log.append(f"CHILD/BATCH: {nested} -> {release}")
-                    yield SeriesRoot(first.name, release)
-            else:
-                attached_children=child_releases if _is_series_bundle(first,meaningful_children) else structural_children
-                for child in attached_children:
-                    child_log.append(f"CHILD/BATCH: {child} -> {first}")
-                yield SeriesRoot("Other", first, tuple(attached_children))
+            for child in _media_children(first):yield from descend(child,first.name.title())
+        else:yield from descend(first,'Other')
 
 
 # Backwards-compatible name for external callers.
@@ -104,12 +86,11 @@ def _write_diagnostics(path: Path | None, diagnostics: list[str], child_log: lis
 
 
 
-def scan(root: Path, db, progress=lambda *_: None, diagnostics_path: Path | None = None,
+def _scan(root: Path, db, progress=lambda *_: None, diagnostics_path: Path | None = None,
          metadata_status=lambda _message: None, should_cancel=lambda: False, *, match_online=True):
     child_log: list[str] = []
-    if not root.is_dir():
-        metadata_status('Library root is unavailable. Existing records and progress were retained.')
-        return 0
+    from .reconciliation import inventory
+    before=inventory(root,should_cancel)
     roots = list(discover_series_roots(root, child_log))
     diagnostics = [f"AniVault scanner diagnostics — {datetime.now(timezone.utc).isoformat()}",
                    f"Library root: {root}", ""]
@@ -148,7 +129,7 @@ def scan(root: Path, db, progress=lambda *_: None, diagnostics_path: Path | None
         primary=[]
         for item in videos:
             relative=item.path.relative_to(release); nested_parts=relative.parts[:-1]
-            in_extras=any(EXTRA_DIR_WORDS.search(part) for part in nested_parts)
+            in_extras=any(EXTRA_DIR_WORDS.search(part) or re.fullmatch(r"(?i)NC|NCOP|NCED|openings?|endings?",part) for part in nested_parts)
             clearly_extra=in_extras or bool(NON_PRIMARY_VIDEO.search(item.path.stem))
             if not clearly_extra: primary.append(item)
         if not any(item.kind=="episode" for item in parsed_media) and primary:
@@ -200,14 +181,20 @@ def scan(root: Path, db, progress=lambda *_: None, diagnostics_path: Path | None
             diagnostics.append("PENDING ANILIST LOOKUP")
             diagnostics.append("")
         progress(index, len(roots), 'Restricted source' if db.anime_scope(saved,fresh=False)=='restricted' else parsed_title.title)
-    db.finish_scan()
+    if inventory(root,should_cancel)!=before:
+        from .reconciliation import ScanChanged
+        raise ScanChanged('Library changed during scan; retry reconciliation.')
+    from .reconciliation import complete
+    complete(db,root,touched,before)
+
     for anime_id,level,details,parsed,mixed in pending_states:
         if mixed:mixed_ids.add(anime_id)
         previous=state.source_state(db,anime_id)
         preserved=state.safe_json(previous['report'])
         state.record(db,anime_id,state=level if not preserved.get('candidates') else previous['state'],report=preserved if preserved.get('query')==parsed.title else details,part=parsed.part,format_hint=parsed.format_hint,commit=False)
 
-    db.connection.commit()
+    db.finish_scan()
+    db.last_scan_completed=True
     from . import metadata_jobs as jobs
     from .anilist_transport import configure
     scheduler=configure(db.path.parent)
@@ -222,3 +209,22 @@ def scan(root: Path, db, progress=lambda *_: None, diagnostics_path: Path | None
     diagnostics.extend(['AniList Metadata Matching: '+json.dumps(jobs.summary(db)), 'AniList request diagnostics: '+json.dumps(scheduler.snapshot('normal'))])
     _write_diagnostics(diagnostics_path, diagnostics, child_log)
     return len(roots)
+
+
+def scan(root,db,progress=lambda *_:None,diagnostics_path=None,metadata_status=lambda _:None,should_cancel=lambda:False,*,match_online=True):
+    from .reconciliation import ScanCancelled,ScanChanged,unavailable
+    root=Path(root)
+    db.last_scan_completed=False
+    try:
+        return _scan(root,db,progress,diagnostics_path,metadata_status,should_cancel,match_online=match_online)
+    except ScanCancelled:
+        db.connection.rollback();metadata_status('Scan cancelled; existing library retained.');return 0
+    except ScanChanged:
+        db.connection.rollback();unavailable(db,root,'Needs review')
+        metadata_status('Library changed during scan; existing records retained. Retry after file changes finish.');return 0
+    except OSError:
+        db.connection.rollback();unavailable(db,root,'Source unavailable')
+        metadata_status('Library scan incomplete or source unavailable. Existing records retained.')
+        return 0
+    except Exception:
+        db.connection.rollback();raise

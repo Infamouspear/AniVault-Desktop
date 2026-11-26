@@ -18,7 +18,8 @@ def sanitized_report(db,scope='normal'):
         result.append({'record':row['anime_id'],'file_record':row['media_id'],'season':row['season'],'indexed_count':row['count'],'anilist_id':row['anilist_id'],'state':row['state'],'method':source['method'],'locked':bool(row['locked']),'candidate_ids':[c.get('id') for c in report.get('candidates',[]) if c.get('isAdult') is False],'network_error':bool(report.get('network_error'))})
     from .metadata_jobs import summary
     from .anilist_transport import get_scheduler
-    return {'scanner_report_version':2,'sources':result,'metadata_queue':summary(db),'anilist_requests':get_scheduler().snapshot('normal')}
+    from .reconciliation import health
+    return {'scanner_report_version':3,'health':health(db,scope),'sources':result,'metadata_queue':summary(db),'anilist_requests':get_scheduler().snapshot('normal')}
 
 
 class ScannerReview(QDialog):
@@ -49,7 +50,9 @@ class ScannerReview(QDialog):
 
     def refresh_queue_status(self):
         from .metadata_jobs import progress_text
-        self.queue_status.setText('Local Library Scan: '+getattr(self.window,'local_scan_status','Not running')+'\n'+progress_text(self.window.db))
+        from .reconciliation import health
+        h=health(self.window.db,self.scope)
+        self.queue_status.setText(f"Library health: {h['active']} active · {h['unmatched']} unmatched · {h['ambiguous']} need review · {h['missing_artwork']} missing artwork · {h['retired']} retired · {h['unavailable_sources']} unavailable\n"+'Local Library Scan: '+getattr(self.window,'local_scan_status','Not running')+'\n'+progress_text(self.window.db))
         if self.target:
             target=('media:'+str(self.target['media_id'])) if self.target['media_id'] else 'anime:'+str(self.target['anime_id'])
             jobs=self.window.db.connection.execute('SELECT operation,state,outcome FROM metadata_jobs WHERE scope=? AND target=?',(self.scope,target)).fetchall()
@@ -75,8 +78,10 @@ class ScannerReview(QDialog):
         self.target=self.items[index] if 0<=index<len(self.items) else None
         if not self.target:return
         row=self.target;db=self.window.db;source=state.source_state(db,row['anime_id']);report=row['report'];files=db.media(row['anime_id'])
-        artwork='Available' if row['item'].get('cover_path') and Path(row['item']['cover_path']).is_file() else 'Retry artwork for assigned identity' if row['anilist_id'] else 'Awaiting identification'
-        lines=[f"Local source: {row['source']}",f"Parsed title: {row['title']}",f"Season: {row['season'] or 'Not explicit'} · Format: {source['format_hint'] or 'Unspecified'}",f"Assigned AniList ID: {row['anilist_id'] or 'None'}",f"Decision: {row['state']} · Method: {source['method']} · Manual lock: {'Yes' if row['locked'] else 'No'}",report.get('reason',''),f"Artwork: {artwork}",'Local file provenance:']
+        from .reconciliation import artwork_status
+        artwork=artwork_status(row['item'])
+        local=db.anime(row['anime_id'])
+        lines=[f"Availability: {local['availability']} · {'Active' if local['active'] else 'Retired; history retained'}",f"Last successful scan: {local['last_successful_scan'] or 'Not recorded'} · Generation {local['scan_generation']}",f"Local source: {row['source']}",f"Parsed title: {row['title']}",f"Season: {row['season'] or 'Not explicit'} · Format: {source['format_hint'] or 'Unspecified'}",f"Assigned AniList ID: {row['anilist_id'] or 'None'}",f"Decision: {row['state']} · Method: {source['method']} · Manual lock: {'Yes' if row['locked'] else 'No'}",report.get('reason',''),f"Artwork: {artwork}",'Local file provenance:']
         base=Path(db.anime(row['anime_id'])['root_path'])
         for media in files:
             path=Path(media['path'])

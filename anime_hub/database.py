@@ -446,7 +446,7 @@ class Database:
         file_info = parsed.path.stat()
         modified = file_info.st_mtime
         current=self.connection.execute("SELECT id,anime_id FROM media WHERE path=?",(str(parsed.path),)).fetchone()
-        if current is not None:anime_id=current['anime_id']
+        # Current paths follow the discovered release; stable media IDs preserve user state.
         if current is None:
             signature=f'{file_info.st_dev}:{file_info.st_ino}' if file_info.st_ino else None
             relocated=self.connection.execute("SELECT id,path FROM media WHERE present=0 AND file_identity=?",(signature,)).fetchall() if signature else []
@@ -485,12 +485,12 @@ class Database:
         with self.connection:
             self.connection.execute(f'UPDATE {table} SET personal_rating_units=? WHERE id=?',(rating_units(value),identifier))
 
-    def anime_list(self):
+    def anime_list(self, include_retired=False):
         return self.connection.execute("""SELECT a.*, COUNT(m.id) media_count,
           SUM(CASE WHEN m.kind='episode' THEN 1 ELSE 0 END) episode_count,
           SUM(CASE WHEN m.kind='episode' AND m.watched=1 THEN 1 ELSE 0 END) watched_count,
           SUM(CASE WHEN m.kind<>'episode' AND m.kind<>'ignore' THEN 1 ELSE 0 END) extras_count
-          FROM anime a LEFT JOIN media m ON m.anime_id=a.id AND m.present=1 GROUP BY a.id ORDER BY a.title COLLATE NOCASE""").fetchall()
+          FROM anime a LEFT JOIN media m ON m.anime_id=a.id AND m.present=1 WHERE (? OR a.active=1) GROUP BY a.id ORDER BY a.title COLLATE NOCASE""",(int(include_retired),)).fetchall()
 
     def anime(self, anime_id):
         return self.connection.execute("SELECT * FROM anime WHERE id=?", (anime_id,)).fetchone()
@@ -706,7 +706,7 @@ class Database:
           SUM(CASE WHEN m.kind<>'episode' AND m.kind<>'ignore' THEN 1 ELSE 0 END) extras_count
           FROM collection_entries ci JOIN anime a ON
             (ci.entity_key='local:'||a.id OR (a.anilist_id IS NOT NULL AND ci.entity_key='anilist:'||a.anilist_id))
-          LEFT JOIN media m ON m.anime_id=a.id AND m.present=1 WHERE ci.collection_id=?
+          LEFT JOIN media m ON m.anime_id=a.id AND m.present=1 WHERE ci.collection_id=? AND a.active=1
           GROUP BY a.id ORDER BY {order}""",(collection_id,)).fetchall()
 
     def collection_entries(self,collection_id):
@@ -782,7 +782,7 @@ class Database:
           SUM(CASE WHEN m.kind='episode' AND m.watched=1 THEN 1 ELSE 0 END) watched_count,
           SUM(CASE WHEN m.kind<>'episode' AND m.kind<>'ignore' THEN 1 ELSE 0 END) extras_count
           FROM franchise_items fi JOIN anime a ON a.id=fi.anime_id LEFT JOIN media m ON m.anime_id=a.id AND m.present=1
-          WHERE fi.franchise_id=? GROUP BY a.id ORDER BY fi.sort_order,a.title COLLATE NOCASE""",(franchise_id,)).fetchall()
+          WHERE fi.franchise_id=? AND a.active=1 GROUP BY a.id ORDER BY fi.sort_order,a.title COLLATE NOCASE""",(franchise_id,)).fetchall()
 
     def media(self, anime_id):
         return self.connection.execute("""SELECT * FROM media WHERE anime_id=? AND kind<>'ignore' ORDER BY
@@ -895,7 +895,7 @@ class Database:
           COUNT(m.id) episode_count,
           SUM(CASE WHEN m.watched=1 THEN 1 ELSE 0 END) watched_count
           FROM anime a JOIN media m ON m.anime_id=a.id AND m.present=1 AND m.kind='episode'
-          GROUP BY a.id HAVING watched_count>0 AND watched_count<episode_count
+          WHERE a.active=1 GROUP BY a.id HAVING watched_count>0 AND watched_count<episode_count
           ORDER BY a.last_watched_at DESC""").fetchall()
 
     def recently_watched(self, limit=12):
@@ -903,5 +903,5 @@ class Database:
           SUM(CASE WHEN m.kind='episode' THEN 1 ELSE 0 END) episode_count,
           SUM(CASE WHEN m.kind='episode' AND m.watched=1 THEN 1 ELSE 0 END) watched_count
           FROM anime a LEFT JOIN media m ON m.anime_id=a.id AND m.present=1
-          WHERE a.last_watched_at IS NOT NULL GROUP BY a.id
+          WHERE a.active=1 AND a.last_watched_at IS NOT NULL GROUP BY a.id
           ORDER BY a.last_watched_at DESC LIMIT ?""", (limit,)).fetchall()

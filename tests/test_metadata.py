@@ -216,7 +216,7 @@ class MetadataTests(unittest.TestCase):
             finally:
                 db.connection.close()
 
-    def test_initial_d_bundle_rescan_has_one_card_and_preserves_match(self):
+    def test_initial_d_bundle_rescan_keeps_individual_releases_and_preserves_match(self):
         with tempfile.TemporaryDirectory() as temp:
             base=Path(temp); root=base/"Anime"; bundle=root/"[Judas] Initial D (Complete Series + Movies) [BD 1080p]"
             for number,stage in enumerate(("First Stage","Second Stage","Extra Stage"),1):
@@ -228,7 +228,7 @@ class MetadataTests(unittest.TestCase):
                 with patch("anime_hub.scanner.lookup_anilist",return_value=unmatched): scan(root,db)
                 row=db.anime_list()[0]; db.set_metadata(row["id"],185,{"id":185,"title":{"english":"Initial D First Stage"}})
                 with patch("anime_hub.scanner.lookup_anilist") as lookup: count=scan(root,db)
-                self.assertEqual(count,1); self.assertEqual(len(db.anime_list()),1)
+                self.assertEqual(count,3); self.assertEqual(len(db.anime_list()),3)
                 self.assertEqual(db.anime_list()[0]["anilist_id"],185); lookup.assert_not_called()
             finally:
                 db.connection.close()

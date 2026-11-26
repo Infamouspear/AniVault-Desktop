@@ -82,6 +82,9 @@ class MangaLibraryMixin:
                 logged+=1
         ui()._append_playback_log('MangaScanSummary '+' '.join(f'{k}={v}' for k,v in summary.items())+f' detail_logs_capped={logged>100}')
         for error in result['errors'][:10]:ui()._append_playback_log('Restricted manga scan error' if getattr(self,'_manga_scan_scope','normal')=='restricted' else 'MangaScanError '+error)
+        self._library_cache_dirty=True
+        self._cancel_hub_hover();self._unpin_hub_selection()
+        if hasattr(self,'context_rail'):self.context_rail.hide()
         self._manga_cover_attempts.clear();self.statusBar().showMessage(f"Manga scan: {summary['series']} series, {summary['items']} items; {summary['errors']} errors",8000)
         if self.current_view in {'manga_library','restricted_manga_library'}:self.show_manga_library(**self.manga_context)
         elif self.current_view in {'manga_detail','restricted_manga_detail'}:self.show_manga_detail(self.current_manga_id)

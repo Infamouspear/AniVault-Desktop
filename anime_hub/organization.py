@@ -50,7 +50,13 @@ class Organization:
         self.db=db;self.manga=manga_store;self.scope=scope;self.entities={};self.by_key={}
         availability=dict(db.connection.execute("SELECT anime_id,SUM(CASE WHEN present=1 AND kind='episode' THEN 1 ELSE 0 END) FROM media GROUP BY anime_id"))
         anime_rows=db.anime_list();scopes=db.anime_scope_map(anime_rows)
-        self.private_anilist_ids={row['anilist_id'] for row in anime_rows if scopes[row['id']]=='restricted' and row['anilist_id']}
+        self.private_anilist_ids={row['anilist_id'] for row in db.anime_list(include_retired=True) if db.anime_scope(row,fresh=False)=='restricted' and row['anilist_id']}
+        all_rows=db.anime_list(include_retired=True)
+        active_ids={r['anilist_id'] for r in anime_rows if r['anilist_id']}
+        self.retired_aliases={'anilist:'+str(r['anilist_id']) for r in all_rows if not r['active'] and r['anilist_id'] and r['anilist_id'] not in active_ids}
+        manga_active={r['id'] for r in manga_store.series_list(scope)}
+        self.retired_aliases.update('anilist:'+str(r['anilist_id']) for r in db.connection.execute('SELECT id,anilist_id FROM manga_series WHERE scope=?',(scope,)) if r['id'] not in manga_active and r['anilist_id'])
+        self.explicit_saved={'anilist:'+str(r['anilist_id']) for r in db.saved_titles(scope=scope)}
         for row in anime_rows:
             row=dict(row);item=metadata(row['metadata_json'])
             row['metadata_json']=json.dumps(item)
@@ -99,6 +105,7 @@ class Organization:
         for alias in entity.aliases:self.by_key[(entity.media_type,alias)]=entity
 
     def resolve(self,key,item=None):
+        if key in self.retired_aliases and key not in self.explicit_saved:return None
         item=metadata(item)
         if not item:
             matches=[entity for (kind,alias),entity in self.by_key.items() if alias==key]

@@ -26,6 +26,7 @@ def backup(db,reason='scan'):
 def migrate(db):
     c=db.connection
     if not c.execute("SELECT 1 FROM sqlite_master WHERE name='scan_sources'").fetchone() and c.execute('SELECT 1 FROM anime LIMIT 1').fetchone():backup(db,'pre-scanner')
+    if 'active' not in {r[1] for r in c.execute('PRAGMA table_info(anime)')} and c.execute('SELECT 1 FROM anime LIMIT 1').fetchone():backup(db,'pre-reconciliation')
     with c:
         if not c.in_transaction:c.execute('BEGIN')
         c.execute("""CREATE TABLE IF NOT EXISTS scan_sources (
@@ -44,6 +45,12 @@ def migrate(db):
         for name,kind in [('file_identity','TEXT'),('episode_end','INTEGER')]:
             if name not in columns:c.execute(f'ALTER TABLE media ADD COLUMN {name} {kind}')
         c.execute('CREATE INDEX IF NOT EXISTS media_file_identity ON media(file_identity)')
+        columns={r[1] for r in c.execute('PRAGMA table_info(anime)')}
+        for name,kind in [('source_stamp','TEXT'),('source_identity','TEXT'),('active','INTEGER NOT NULL DEFAULT 1'),('availability',"TEXT NOT NULL DEFAULT 'Needs review'"),('last_successful_scan','TEXT'),('scan_generation','INTEGER NOT NULL DEFAULT 0')]:
+            if name not in columns:c.execute(f'ALTER TABLE anime ADD COLUMN {name} {kind}')
+        c.execute("CREATE TABLE IF NOT EXISTS scan_root_health(root TEXT PRIMARY KEY,generation INTEGER NOT NULL DEFAULT 0,status TEXT,indexed INTEGER NOT NULL DEFAULT 0,retired INTEGER NOT NULL DEFAULT 0,updated TEXT)")
+        c.execute("CREATE TABLE IF NOT EXISTS scan_source_history(id INTEGER PRIMARY KEY,anime_id INTEGER NOT NULL REFERENCES anime(id),root_path TEXT NOT NULL,availability TEXT NOT NULL,generation INTEGER NOT NULL,created TEXT DEFAULT CURRENT_TIMESTAMP)")
+
 
 
 def path_key(path):return os.path.normcase(os.path.abspath(str(path)))
@@ -55,31 +62,34 @@ def file_identity(path):
 def source_snapshot(db):
     # Immutable evidence is essential when one old container is split into roots.
     # Relocating the first file must not make the remaining subset look like a rename.
-    rows=[dict(r) for r in db.anime_list()];signatures={r['id']:set() for r in rows}
+    rows=[dict(r) for r in db.anime_list(include_retired=True)];signatures={r['id']:set() for r in rows}
     for media in db.connection.execute('SELECT anime_id,path,file_identity FROM media'):
-        if media['file_identity'] and Path(media['path']).suffix.lower() in VIDEO_EXTS:signatures[media['anime_id']].add(media['file_identity'])
+        if media['file_identity'] and Path(media['path']).suffix.lower() in VIDEO_EXTS:signatures.setdefault(media['anime_id'],set()).add(media['file_identity'])
     return {'rows':rows,'signatures':signatures,'missing':{r['id'] for r in rows if not Path(r['root_path']).exists()},'claimed':set()}
 
 
 def source_id(db,path,parsed,files,category,snapshot=None):
-    rows=db.anime_list();same=[r for r in rows if path_key(r['root_path'])==path_key(path)]
+    rows=db.anime_list(include_retired=True);same=[r for r in rows if path_key(r['root_path'])==path_key(path)]
     found=same[0] if same else None
-    if found is None:
-        owned={r['anime_id'] for f in files for r in db.connection.execute('SELECT anime_id FROM media WHERE path=?',(str(f),))}
-        if len(owned)==1:
-            # Older scanners collapsed multiple roots into one local identity.
-            # Retain those file associations; separating them requires deliberate review.
-            return next(iter(owned))
     if found is None:
         # Only filesystem identities can prove a rename. Similar names/size never merge sources.
         identities={file_identity(f) for f in files if f.suffix.lower() in VIDEO_EXTS}-{None}
         snapshot=snapshot or source_snapshot(db)
         previous={r['id']:r for r in snapshot['rows'] if r['id'] in snapshot['missing'] and r['id'] not in snapshot['claimed']}
-        evidence=[identifier for identifier in previous if identities and identities==snapshot['signatures'].get(identifier)]
+        directory_identity=file_identity(path)
+        evidence=[identifier for identifier in previous if (directory_identity and previous[identifier]['source_identity']==directory_identity) or (identities and identities==snapshot['signatures'].get(identifier))]
         if len(evidence)==1:
             found=previous[evidence[0]];snapshot['claimed'].add(found['id'])
     identity=found['identity'] if found else 'source:'+hashlib.sha256(path_key(path).encode()).hexdigest()[:28]
-    return db.upsert_anime(identity,parsed.title,parsed.alternate_title,category,str(path),path.name,parsed.title,parsed.season if parsed.season_explicit else None,parsed.year)
+    identifier=db.upsert_anime(identity,parsed.title,parsed.alternate_title,category,str(path),path.name,parsed.title,parsed.season if parsed.season_explicit else None,parsed.year)
+    # A newly separated child must inherit an existing private classification.
+    owners={r['anime_id'] for f in files for r in db.connection.execute('SELECT anime_id FROM media WHERE path=?',(str(f),))}
+    signatures={file_identity(f) for f in files if f.suffix.lower() in VIDEO_EXTS}-{None}
+    owners.update(r['anime_id'] for r in db.connection.execute('SELECT anime_id,file_identity FROM media') if r['file_identity'] in signatures)
+    if any(db.anime_scope(i)=='restricted' for i in owners):
+        item=safe_json(db.anime(identifier)['metadata_json']);item['isAdult']=True
+        db.connection.execute('UPDATE anime SET metadata_json=? WHERE id=?',(json.dumps(item),identifier))
+    return identifier
 
 
 def source_state(db,anime_id):
@@ -161,13 +171,13 @@ def review_rows(db,scope='normal'):
     if scope not in {'normal','restricted'} or (scope=='restricted' and db.setting('restricted_unlocked','0')!='1'):return []
     result=[]
     missing=dict(db.connection.execute('SELECT anime_id,SUM(present=0) FROM media GROUP BY anime_id'))
-    for row in db.anime_list():
+    for row in db.anime_list(include_retired=True):
         if db.anime_scope(row,fresh=False)!=scope:continue
         state=source_state(db,row['id']);item=safe_json(row['metadata_json'])
         result.append({'anime_id':row['id'],'media_id':None,'title':row['parsed_search_title'] or row['title'],'source':row['root_path'],'season':row['detected_season'],'count':row['media_count'],'state':state['state'] if state['method']!='legacy' or state.get('updated') else 'Existing match' if row['anilist_id'] else 'Unmatched','item':item,'report':safe_json(state['report']),'locked':state['locked'],'anilist_id':row['anilist_id']})
-        if missing.get(row['id']):
-            result[-1]['state']='Missing source'
-            result[-1]['report']={**result[-1]['report'],'reason':str(missing[row['id']])+' unavailable indexed files were retained, including their user data.'}
+        if not row['active'] or row['availability']=='Source unavailable' or missing.get(row['id']):
+            result[-1]['state']='Retired source' if not row['active'] else row['availability'] if row['availability']=='Source unavailable' else 'Missing source'
+            result[-1]['report']={**result[-1]['report'],'reason':str(missing.get(row['id'],0))+' unavailable indexed files were retained, including their user data.'}
         for media in db.connection.execute('SELECT f.*,m.path FROM scan_file_matches f JOIN media m ON m.id=f.media_id WHERE m.anime_id=?',(row['id'],)):
             result.append({'anime_id':row['id'],'media_id':media['media_id'],'format_hint':media['format_hint'],'title':media['parsed_title'],'source':media['path'],'season':None,'count':1,'state':media['state'],'item':safe_json(media['metadata_json']),'report':safe_json(media['report']),'locked':media['locked'],'anilist_id':media['anilist_id']})
     return result

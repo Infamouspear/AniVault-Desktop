@@ -144,14 +144,16 @@ def test_artwork_recovery_validates_cache_and_keeps_custom_art(tmp_path):
     assert not list((tmp_path/'art').glob('*.part'))
 
 
-def test_old_collapsed_release_keeps_media_ownership_during_review(tmp_path):
+def test_old_collapsed_release_splits_ownership_without_losing_media_ids(tmp_path):
     root=tmp_path/'Anime';one=root/'Example Saga S01';two=root/'Example Saga S01 Copy'
     for folder in (one,two):folder.mkdir(parents=True);(folder/'S01E01.mkv').touch()
     db=Database(tmp_path/'vault.db');aid=db.upsert_anime('legacy-collapse','Example Saga','','Other',str(two))
     for folder in (one,two):db.upsert_media(aid,classify_file(folder/'S01E01.mkv'))
     db.connection.commit();before={r['id']:r['anime_id'] for r in db.media(aid)}
     with patch('anime_hub.scanner.lookup_anilist',return_value=LookupReport('Example Saga')):scan(root,db)
-    assert len(db.anime_list())==1 and before=={r['id']:r['anime_id'] for r in db.media(aid)}
+    assert len(db.anime_list())==2
+    after={r['id']:r['anime_id'] for r in db.connection.execute('SELECT id,anime_id FROM media')}
+    assert set(before)==set(after) and len(set(after.values()))==2
     db.connection.close()
 
 
