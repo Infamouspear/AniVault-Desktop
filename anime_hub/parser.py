@@ -21,6 +21,27 @@ EXTRA_DIR_WORDS = re.compile(
     r"\b(extras?|specials?|scans?|artwork|booklets?|audio\s*cd|drama\s*cd|ost)\b", re.I
 )
 
+EXTRA_FOLDERS = {
+    "opening": r"(?:nc|ncop|op|openings?)(?: \d+)?",
+    "ending": r"(?:nced|ed|endings?)(?: \d+)?",
+    "credits": r"(?:op (?:and )?ed|openings? (?:and )?endings?|creditless)",
+    "trailer": r"(?:pvs?|cms?|trailers?|previews?|promos?)(?: \d+)?",
+    "menu": r"(?:bd |dvd )?menus?",
+    "bonus": r"(?:cds?|live actions?|bonus(?: content| features?)?|extras?|samples?|audio cds?|drama cds?|osts?|scans?|artworks?|booklets?)",
+    "special": r"(?:specials?|sps?)(?: \d+)?",
+    "ova": r"(?:ovas?|oads?)(?: \d+)?",
+}
+PACK_EXTRAS = re.compile(
+    r"\s*(?:\+\s*|,\s*)(?:ovas?|oads?|specials?|sps?|extras?)"
+    r"(?:\s*(?:\++|,)\s*(?:ovas?|oads?|specials?|sps?|extras?))*\s*$", re.I
+)
+
+
+def extra_folder_kind(name: str) -> str | None:
+    cleaned = re.sub(r"[^a-z0-9]+", " ", name.casefold().replace("&", " and ")).strip()
+    return next((kind for kind, pattern in EXTRA_FOLDERS.items() if re.fullmatch(pattern, cleaned)), None)
+
+
 NOISE_TOKEN = re.compile(
     r"\[(?:\d{3,4}p|(?:hevc|avc|x26[45]|h\.?26[45])(?:[^\]]*)?|10\s*bit|8\s*bit|"
     r"dual[- ]?audio|multi[- ]?subs?|eng[- ]?subs?|bd(?:rip)?|blu[- ]?ray|web(?:-?dl|rip)?|"
@@ -105,7 +126,7 @@ STRUCTURAL_FOLDER = re.compile(
 
 def is_structural_folder(name: str) -> bool:
     cleaned = re.sub(r"[\[\](){}]", "", name).strip(" ._-")
-    return not cleaned or bool(STRUCTURAL_FOLDER.fullmatch(cleaned))
+    return not cleaned or bool(STRUCTURAL_FOLDER.fullmatch(cleaned)) or bool(extra_folder_kind(cleaned))
 
 
 def is_meaningful_title(value: str) -> bool:
@@ -121,6 +142,7 @@ def parse_title(folder_name: str, parent_names: tuple[str, ...] = ()) -> ParsedT
         group = prefix.group(1).strip()
         raw = raw[prefix.end():]
 
+    raw = PACK_EXTRAS.sub("", raw).rstrip(" +,")
     season_match = SEASON_RE.search(raw)
     season = int(season_match.group(1)) if season_match else 1
     part = int(season_match.group(2)) if season_match and season_match.group(2) else None
@@ -160,11 +182,11 @@ def parse_title(folder_name: str, parent_names: tuple[str, ...] = ()) -> ParsedT
                        season_explicit=season_match is not None, format_hint=hint)
 
 
-def classify_file(path: Path, release_season: int = 1) -> ParsedFile:
+def classify_file(path: Path, release_season: int = 1, *, release_root: Path | None = None) -> ParsedFile:
     suffix = path.suffix.lower()
-    context = " ".join(p.name for p in path.parents if p.name)[-500:]
-    text = f"{context} {path.stem}"
-    in_extra_dir = any(EXTRA_DIR_WORDS.search(parent.name) for parent in path.parents)
+    parents = (path.relative_to(release_root).parts[:-1] if release_root is not None
+               else tuple(parent.name for parent in reversed(path.parents)))
+    folder_kind = next((kind for name in reversed(parents) if (kind := extra_folder_kind(name))), None)
 
     if suffix in IMAGE_EXTS:
         return ParsedFile(path, "artwork", reason="image extension")
@@ -172,20 +194,28 @@ def classify_file(path: Path, release_season: int = 1) -> ParsedFile:
         return ParsedFile(path, "audio", reason="audio extension")
     if suffix not in VIDEO_EXTS:
         return ParsedFile(path, "other", reason="unsupported/non-media extension")
-    # Credit sequences can contain episode numbers; classify before episode patterns.
-    if re.fullmatch(r'(?i)NC|NCOP|NCED|openings?|endings?',path.parent.name) or re.match(r'(?i)^(?:OP|ED|NCOP|NCED)(?:\d+)?(?:[ ._-]|$)',path.stem):
-        return ParsedFile(path,'special',reason='opening/ending or credit sequence')
+    if folder_kind:
+        kind = folder_kind
+        if release_root is None:
+            kind = "special"
+        return ParsedFile(path, kind, reason=f"{folder_kind} folder relative to release")
+    if re.match(r'(?i)^(?:OP|ED|NCOP|NCED)(?:\d+)?(?:[ ._-]|$)', path.stem):
+        return ParsedFile(path, 'special', reason='opening/ending or credit sequence')
+    if release_root is not None and re.search(
+        r"(?<![a-z0-9])(?:trailers?|previews?|pv\d*|cm\d*|samples?|creditless|bonus|menus?)(?![a-z0-9])",
+        path.stem, re.I,
+    ):
+        return ParsedFile(path, "special", reason="explicit bonus or promotional marker")
     episode_match=EPISODE_PATTERNS[0].search(path.stem)
-    if episode_match and not in_extra_dir and not SPECIAL_CODE.search(path.stem):
+    if episode_match and not SPECIAL_CODE.search(path.stem):
         end=re.match(r'[-~+]E?(\d{1,4})',path.stem[episode_match.end():],re.I)
         return ParsedFile(path,'episode',int(episode_match.group(1)),int(episode_match.group(2)),'SxxExx pattern',int(end.group(1)) if end else None)
-    if in_extra_dir or SPECIAL_CODE.search(path.stem) or SPECIAL_WORDS.search(path.stem):
-        evidence = "recognized extras folder" if in_extra_dir else "recognized special marker in name"
-        return ParsedFile(path, "special", reason=evidence)
+    if SPECIAL_CODE.search(path.stem) or SPECIAL_WORDS.search(path.stem):
+        return ParsedFile(path, "special", reason="recognized special marker in name")
 
     path_season = release_season
-    for parent in path.parents:
-        season_match = SEASON_RE.fullmatch(parent.name.strip())
+    for name in reversed(parents):
+        season_match = SEASON_RE.fullmatch(name.strip())
         if season_match:
             path_season = int(season_match.group(1))
             break
@@ -204,6 +234,7 @@ def classify_file(path: Path, release_season: int = 1) -> ParsedFile:
     # Real releases often use just "Title 01". Ignore technical/year numbers,
     # then prefer the final plausible 1-3 digit token.
     number_source = re.sub(r"\[[^\]]*\]|\([^)]*\)", " ", path.stem)
+    number_source = re.sub(r"(?<=\d)v\d+\b", "", number_source, flags=re.I)
     plausible = [int(value) for value in re.findall(r"(?<![A-Za-z0-9])0*(\d{1,3})(?![A-Za-z0-9])", number_source)
                  if int(value) not in {264, 265, 480, 720}]
     if plausible:
