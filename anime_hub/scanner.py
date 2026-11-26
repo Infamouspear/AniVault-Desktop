@@ -88,7 +88,17 @@ def select_episode_versions(db, anime_id, media):
         return not has_progress, -revision, str(item.path).casefold()
 
     for versions in groups.values():
-        for alternate in sorted(versions, key=rank)[1:]:
+        if len(versions) < 2:
+            continue
+        automatic = []
+        manual_episode = False
+        for item in versions:
+            override = db.connection.execute("SELECT kind FROM overrides WHERE path=?", (str(item.path),)).fetchone()
+            if override is None:
+                automatic.append(item)
+            elif override["kind"] == "episode":
+                manual_episode = True
+        for alternate in sorted(automatic, key=rank)[int(not manual_episode):]:
             alternate.kind = "alternate"
             alternate.reason = "alternate or duplicate episode number"
 
@@ -211,8 +221,9 @@ def _scan(root: Path, db, progress=lambda *_: None, diagnostics_path: Path | Non
     for anime_id, level, details, parsed in pending_states:
         previous=state.source_state(db,anime_id)
         preserved=state.safe_json(previous['report'])
-        if level == 'Unmatched' and preserved.get('query') == parsed.title and 'candidates' in preserved:
-            level, details = previous['state'], preserved
+        if preserved.get('query') == parsed.title and 'candidates' in preserved:
+            if level == 'Unmatched' or (level == 'Existing match' and previous['state'] == 'High Confidence'):
+                level, details = previous['state'], preserved
         state.record(db, anime_id, state=level, report=details, part=parsed.part,
                      format_hint=parsed.format_hint, commit=False)
 

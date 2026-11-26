@@ -77,5 +77,5 @@ and advanced playback in both files.
 
 The v1.9.4 Windows x64 installer passed the packaged TLS startup and bundle
 integrity checks. SHA-256:
-CB9D6D3802D3D80D4DA484E971BEC7AEC4B6A548BE25DC810F738BD944252124.
+E2CCB98B84804BCE2157D33F7ADCCEF9B6A0ECD1F073589772EBD3A31C5C9E87.
 GitHub v1.9.3 remains the baseline release. The candidate was built locally.

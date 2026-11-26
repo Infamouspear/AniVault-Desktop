@@ -95,3 +95,20 @@ def test_cyberpunk_second_season_cannot_reuse_first_season_metadata(tmp_path):
         assert rows[0]['id'] != rows[1]['id']
     finally:
         db.connection.close()
+
+
+def test_alternate_selection_respects_manual_file_classification(tmp_path):
+    root = tmp_path / 'Anime'
+    release = root / 'Example Show'
+    video(release, 'Example Show - 01')
+    video(release, 'Example Show - 01v2')
+    db = Database(tmp_path / 'vault.db')
+    try:
+        scan(root, db, match_online=False)
+        row, = db.anime_list()
+        db.override(str(release / 'Example Show - 01v2.mkv'), 'ignore')
+        scan(root, db, match_online=False)
+        item, = [file for file in db.media(row['id']) if file['kind'] == 'episode']
+        assert item['path'].endswith('01.mkv')
+    finally:
+        db.connection.close()
