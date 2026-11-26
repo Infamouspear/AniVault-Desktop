@@ -449,11 +449,13 @@ class Database:
         if current is not None:anime_id=current['anime_id']
         if current is None:
             signature=f'{file_info.st_dev}:{file_info.st_ino}' if file_info.st_ino else None
-            relocated=self.connection.execute("SELECT id,path FROM media WHERE anime_id=? AND present=0 AND file_identity=?",(anime_id,signature)).fetchall() if signature else []
+            relocated=self.connection.execute("SELECT id,path FROM media WHERE present=0 AND file_identity=?",(signature,)).fetchall() if signature else []
             if len(relocated)==1 and not Path(relocated[0]["path"]).exists():
                 old_path=relocated[0]["path"]
-                self.connection.execute("""UPDATE media SET path=?,kind=?,season=?,episode=?,detected_kind=?,present=1,modified=?,size_bytes=? WHERE id=?""",
-                                        (str(parsed.path),kind,parsed.season,parsed.episode,parsed.kind,modified,file_info.st_size,relocated[0]["id"]))
+                previous_override=self.connection.execute("SELECT kind FROM overrides WHERE path=?",(old_path,)).fetchone()
+                if previous_override and not override:kind=previous_override[0]
+                self.connection.execute("""UPDATE media SET anime_id=?,path=?,kind=?,season=?,episode=?,detected_kind=?,present=1,modified=?,size_bytes=? WHERE id=?""",
+                                        (anime_id,str(parsed.path),kind,parsed.season,parsed.episode,parsed.kind,modified,file_info.st_size,relocated[0]["id"]))
                 self.connection.execute("UPDATE overrides SET path=? WHERE path=?",(str(parsed.path),old_path))
                 self.connection.execute('UPDATE media SET file_identity=?,episode_end=? WHERE id=?',(f'{file_info.st_dev}:{file_info.st_ino}' if file_info.st_ino else None,getattr(parsed,'episode_end',None),relocated[0]['id']))
                 return
@@ -488,7 +490,7 @@ class Database:
           SUM(CASE WHEN m.kind='episode' THEN 1 ELSE 0 END) episode_count,
           SUM(CASE WHEN m.kind='episode' AND m.watched=1 THEN 1 ELSE 0 END) watched_count,
           SUM(CASE WHEN m.kind<>'episode' AND m.kind<>'ignore' THEN 1 ELSE 0 END) extras_count
-          FROM anime a LEFT JOIN media m ON m.anime_id=a.id GROUP BY a.id ORDER BY a.title COLLATE NOCASE""").fetchall()
+          FROM anime a LEFT JOIN media m ON m.anime_id=a.id AND m.present=1 GROUP BY a.id ORDER BY a.title COLLATE NOCASE""").fetchall()
 
     def anime(self, anime_id):
         return self.connection.execute("SELECT * FROM anime WHERE id=?", (anime_id,)).fetchone()
@@ -704,7 +706,7 @@ class Database:
           SUM(CASE WHEN m.kind<>'episode' AND m.kind<>'ignore' THEN 1 ELSE 0 END) extras_count
           FROM collection_entries ci JOIN anime a ON
             (ci.entity_key='local:'||a.id OR (a.anilist_id IS NOT NULL AND ci.entity_key='anilist:'||a.anilist_id))
-          LEFT JOIN media m ON m.anime_id=a.id WHERE ci.collection_id=?
+          LEFT JOIN media m ON m.anime_id=a.id AND m.present=1 WHERE ci.collection_id=?
           GROUP BY a.id ORDER BY {order}""",(collection_id,)).fetchall()
 
     def collection_entries(self,collection_id):
@@ -779,7 +781,7 @@ class Database:
           COUNT(m.id) media_count,SUM(CASE WHEN m.kind='episode' THEN 1 ELSE 0 END) episode_count,
           SUM(CASE WHEN m.kind='episode' AND m.watched=1 THEN 1 ELSE 0 END) watched_count,
           SUM(CASE WHEN m.kind<>'episode' AND m.kind<>'ignore' THEN 1 ELSE 0 END) extras_count
-          FROM franchise_items fi JOIN anime a ON a.id=fi.anime_id LEFT JOIN media m ON m.anime_id=a.id
+          FROM franchise_items fi JOIN anime a ON a.id=fi.anime_id LEFT JOIN media m ON m.anime_id=a.id AND m.present=1
           WHERE fi.franchise_id=? GROUP BY a.id ORDER BY fi.sort_order,a.title COLLATE NOCASE""",(franchise_id,)).fetchall()
 
     def media(self, anime_id):
@@ -892,7 +894,7 @@ class Database:
         return self.connection.execute("""SELECT a.*,
           COUNT(m.id) episode_count,
           SUM(CASE WHEN m.watched=1 THEN 1 ELSE 0 END) watched_count
-          FROM anime a JOIN media m ON m.anime_id=a.id AND m.kind='episode'
+          FROM anime a JOIN media m ON m.anime_id=a.id AND m.present=1 AND m.kind='episode'
           GROUP BY a.id HAVING watched_count>0 AND watched_count<episode_count
           ORDER BY a.last_watched_at DESC""").fetchall()
 
@@ -900,6 +902,6 @@ class Database:
         return self.connection.execute("""SELECT a.*,
           SUM(CASE WHEN m.kind='episode' THEN 1 ELSE 0 END) episode_count,
           SUM(CASE WHEN m.kind='episode' AND m.watched=1 THEN 1 ELSE 0 END) watched_count
-          FROM anime a LEFT JOIN media m ON m.anime_id=a.id
+          FROM anime a LEFT JOIN media m ON m.anime_id=a.id AND m.present=1
           WHERE a.last_watched_at IS NOT NULL GROUP BY a.id
           ORDER BY a.last_watched_at DESC LIMIT ?""", (limit,)).fetchall()

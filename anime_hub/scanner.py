@@ -118,6 +118,7 @@ def scan(root: Path, db, progress=lambda *_: None, diagnostics_path: Path | None
         return 0
     from . import scan_state as state
     state.backup(db,'before-scan')
+    original_sources=state.source_snapshot(db)
     db.start_scan(root)
     touched=[]
     mixed_ids=set()
@@ -133,7 +134,7 @@ def scan(root: Path, db, progress=lambda *_: None, diagnostics_path: Path | None
         parsed_title = parse_title(release.name, parent_candidates)
         media_files = [p for p in release.rglob("*") if p.is_file() and
                        p.suffix.lower() in VIDEO_EXTS | AUDIO_EXTS | IMAGE_EXTS]
-        anime_id = state.source_id(db,release,parsed_title,media_files,category)
+        anime_id = state.source_id(db,release,parsed_title,media_files,category,original_sources)
         touched.append(anime_id)
         episode_count = extras_count = 0
         classification_notes = []

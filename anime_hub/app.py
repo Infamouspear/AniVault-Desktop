@@ -388,6 +388,9 @@ class Card(QFrame):
         episodes=row["episode_count"] or 0;watched=row["watched_count"] or 0
         self._favorite=bool(row["favorite"]);self._base_title=name;self.title_label=label
         self._episodes=episodes;self._watched=watched
+        from .parser import parse_title
+        kind=metadata.get('format') or parse_title((row['source_folder_name'] if 'source_folder_name' in row.keys() else '') or row['title']).format_hint
+        self._count_noun='movie' if kind=='MOVIE' else 'episode';self._extra_count=(row['extras_count'] or 0) if 'extras_count' in row.keys() else 0
         self.set_favorite(self._favorite)
         self.status_label=text_slot(lay,'muted',20);self.set_manual_status(manual_status)
         if next_episode:
@@ -404,7 +407,8 @@ class Card(QFrame):
         if event.button()==Qt.LeftButton:self.clicked.emit(self.anime_id)
     def set_manual_status(self,status):
         state=status or ('Completed' if self._episodes and self._watched>=self._episodes else 'Watching' if self._watched else '')
-        count=(f'{self._watched}/{self._episodes}' if 0<self._watched<self._episodes else f'{self._episodes} episodes' if self._episodes else '')
+        count=(f'{self._watched}/{self._episodes}' if 0<self._watched<self._episodes else f'{self._episodes} {self._count_noun}'+('s' if self._episodes!=1 else '') if self._episodes else '')
+        if self._count_noun=='movie' and self._extra_count:count+=f' · {self._extra_count} extra'+('s' if self._extra_count!=1 else '')
         self.status_label.setText(' · '.join(filter(None,(state,count))))
     def set_favorite(self,value):
         self._favorite=bool(value);self.title_label.setText(('♥  ' if value else '')+self._base_title)

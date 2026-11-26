@@ -52,7 +52,16 @@ def file_identity(path):
     stat=path.stat();return f'{stat.st_dev}:{stat.st_ino}' if stat.st_ino else None
 
 
-def source_id(db,path,parsed,files,category):
+def source_snapshot(db):
+    # Immutable evidence is essential when one old container is split into roots.
+    # Relocating the first file must not make the remaining subset look like a rename.
+    rows=[dict(r) for r in db.anime_list()];signatures={r['id']:set() for r in rows}
+    for media in db.connection.execute('SELECT anime_id,path,file_identity FROM media'):
+        if media['file_identity'] and Path(media['path']).suffix.lower() in VIDEO_EXTS:signatures[media['anime_id']].add(media['file_identity'])
+    return {'rows':rows,'signatures':signatures,'missing':{r['id'] for r in rows if not Path(r['root_path']).exists()},'claimed':set()}
+
+
+def source_id(db,path,parsed,files,category,snapshot=None):
     rows=db.anime_list();same=[r for r in rows if path_key(r['root_path'])==path_key(path)]
     found=same[0] if same else None
     if found is None:
@@ -64,9 +73,11 @@ def source_id(db,path,parsed,files,category):
     if found is None:
         # Only filesystem identities can prove a rename. Similar names/size never merge sources.
         identities={file_identity(f) for f in files if f.suffix.lower() in VIDEO_EXTS}-{None}
-        previous={r['id']:r for r in rows if not Path(r['root_path']).exists()}
-        evidence={r['anime_id'] for r in db.connection.execute('SELECT anime_id,file_identity FROM media WHERE file_identity IS NOT NULL') if r['anime_id'] in previous and r['file_identity'] in identities}
-        if len(evidence)==1:found=previous[next(iter(evidence))]
+        snapshot=snapshot or source_snapshot(db)
+        previous={r['id']:r for r in snapshot['rows'] if r['id'] in snapshot['missing'] and r['id'] not in snapshot['claimed']}
+        evidence=[identifier for identifier in previous if identities and identities==snapshot['signatures'].get(identifier)]
+        if len(evidence)==1:
+            found=previous[evidence[0]];snapshot['claimed'].add(found['id'])
     identity=found['identity'] if found else 'source:'+hashlib.sha256(path_key(path).encode()).hexdigest()[:28]
     return db.upsert_anime(identity,parsed.title,parsed.alternate_title,category,str(path),path.name,parsed.title,parsed.season if parsed.season_explicit else None,parsed.year)
 
