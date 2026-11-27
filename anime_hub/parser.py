@@ -72,6 +72,7 @@ class ParsedFile:
     episode: int | None = None
     reason: str = ""
     episode_end: int | None = None
+    episode_label: str | None = None
 
 
 def _tidy(value: str) -> str:
@@ -154,6 +155,8 @@ def parse_title(folder_name: str, parent_names: tuple[str, ...] = ()) -> ParsedT
         title = "Unknown Anime"
     hint_raw=re.sub(r'\([^)]*(?:complete|series|s\d+\s*-)[^)]*\)', '', raw, flags=re.I)
     hint='MOVIE' if re.search(r'\bmovies?\b',hint_raw,re.I) else 'OVA' if re.search(r'\b(?:ova|oad)s?\b',hint_raw,re.I) else 'SPECIAL' if re.search(r'\b(?:specials?|sps?)\b',hint_raw,re.I) else None
+    from .episode_identity import PICTURE_DRAMA
+    if PICTURE_DRAMA.search(raw):hint='PICTURE_DRAMA'
     if hint and is_structural_folder(folder_name) and title!='Unknown Anime':title+=' '+('OVAs' if hint=='OVA' else 'Movies' if hint=='MOVIE' else 'Specials')
     return ParsedTitle(title=title, alternate_title=alternate if english else "",
                        release_group=group, season=season, part=part, year=year,
@@ -175,6 +178,12 @@ def classify_file(path: Path, release_season: int = 1) -> ParsedFile:
     # Credit sequences can contain episode numbers; classify before episode patterns.
     if re.fullmatch(r'(?i)NC|NCOP|NCED|openings?|endings?',path.parent.name) or re.match(r'(?i)^(?:OP|ED|NCOP|NCED)(?:\d+)?(?:[ ._-]|$)',path.stem):
         return ParsedFile(path,'special',reason='opening/ending or credit sequence')
+    from .episode_identity import source_label
+    label=source_label(path.stem)
+    if label is not None and ('.' in label or re.search(r'(?i)\b(?:stage|turn)\s',path.stem)) and not in_extra_dir and not SPECIAL_CODE.search(path.stem):
+        numbered_season=re.search(r'(?i)\bS([0-9]+)E',path.stem)
+        exact_season=int(numbered_season.group(1)) if numbered_season else release_season
+        return ParsedFile(path,'episode',exact_season,None,'exact source episode identifier',episode_label=label) if '.' in label else ParsedFile(path,'episode',release_season,int(label),'explicit episode identifier',episode_label=label)
     episode_match=EPISODE_PATTERNS[0].search(path.stem)
     if episode_match and not in_extra_dir and not SPECIAL_CODE.search(path.stem):
         end=re.match(r'[-~+]E?(\d{1,4})',path.stem[episode_match.end():],re.I)

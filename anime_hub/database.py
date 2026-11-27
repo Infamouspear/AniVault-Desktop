@@ -457,7 +457,7 @@ class Database:
                 self.connection.execute("""UPDATE media SET anime_id=?,path=?,kind=?,season=?,episode=?,detected_kind=?,present=1,modified=?,size_bytes=? WHERE id=?""",
                                         (anime_id,str(parsed.path),kind,parsed.season,parsed.episode,parsed.kind,modified,file_info.st_size,relocated[0]["id"]))
                 self.connection.execute("UPDATE overrides SET path=? WHERE path=?",(str(parsed.path),old_path))
-                self.connection.execute('UPDATE media SET file_identity=?,episode_end=? WHERE id=?',(f'{file_info.st_dev}:{file_info.st_ino}' if file_info.st_ino else None,getattr(parsed,'episode_end',None),relocated[0]['id']))
+                self.connection.execute('UPDATE media SET file_identity=?,episode_end=?,episode_label=? WHERE id=?',(f'{file_info.st_dev}:{file_info.st_ino}' if file_info.st_ino else None,getattr(parsed,'episode_end',None),getattr(parsed,'episode_label',None),relocated[0]['id']))
                 return
         self.connection.execute("""INSERT INTO media(anime_id,path,kind,season,episode,detected_kind,present,modified,size_bytes)
           VALUES(?,?,?,?,?,?,1,?,?) ON CONFLICT(path) DO UPDATE SET anime_id=excluded.anime_id,
@@ -466,7 +466,7 @@ class Database:
           season=excluded.season,episode=excluded.episode,detected_kind=excluded.detected_kind,
           present=1,modified=excluded.modified,size_bytes=excluded.size_bytes""",
           (anime_id, str(parsed.path), kind, parsed.season, parsed.episode, parsed.kind, modified, file_info.st_size))
-        self.connection.execute('UPDATE media SET file_identity=?,episode_end=? WHERE path=?',(f'{file_info.st_dev}:{file_info.st_ino}' if file_info.st_ino else None,getattr(parsed,'episode_end',None),str(parsed.path)))
+        self.connection.execute('UPDATE media SET file_identity=?,episode_end=?,episode_label=? WHERE path=?',(f'{file_info.st_dev}:{file_info.st_ino}' if file_info.st_ino else None,getattr(parsed,'episode_end',None),getattr(parsed,'episode_label',None),str(parsed.path)))
 
     def finish_scan(self):
         # Missing sources are reversible; progress and identities are retained.
@@ -563,7 +563,8 @@ class Database:
     def entity_key_for_anime(self,anime_id):
         row=self.anime(anime_id)
         if not row:raise ValueError("Anime no longer exists.")
-        return self._entity_key(anime_id,row["anilist_id"])
+        shared=row["anilist_id"] and self.connection.execute("SELECT count(*) FROM anime WHERE anilist_id=? AND active=1",(row["anilist_id"],)).fetchone()[0]>1
+        return f"local:{anime_id}" if shared else self._entity_key(anime_id,row["anilist_id"])
 
     def collections(self, sort="Recently Created",scope="normal"):
         order={"Name":"c.name COLLATE NOCASE", "Recently Updated":"c.updated_at DESC",
@@ -611,9 +612,9 @@ class Database:
         item=json.loads(anime['metadata_json'] or '{}')
         if not collection or (item.get('isAdult') is True)!=(collection['scope']=='restricted'):
             raise ValueError('Collection scope must match this anime.')
-        key=self._entity_key(anime_id,anime["anilist_id"])
+        key=self.entity_key_for_anime(anime_id)
         if self.connection.execute('SELECT 1 FROM collection_entries WHERE collection_id=? AND entity_key IN (?,?)',(collection_id,key,f'local:{anime_id}')).fetchone():return False
-        if anime['anilist_id'] and self.connection.execute("SELECT 1 FROM collection_entries WHERE collection_id=? AND entity_key IN (SELECT 'local:'||id FROM anime WHERE anilist_id=?) LIMIT 1",(collection_id,anime['anilist_id'])).fetchone():return False
+        if key.startswith('anilist:') and anime['anilist_id'] and self.connection.execute("SELECT 1 FROM collection_entries WHERE collection_id=? AND entity_key IN (SELECT 'local:'||id FROM anime WHERE anilist_id=?) LIMIT 1",(collection_id,anime['anilist_id'])).fetchone():return False
         cursor=self.connection.execute("INSERT OR IGNORE INTO collection_entries(collection_id,entity_key,metadata_json) VALUES(?,?,?)",(collection_id,key,anime["metadata_json"] or "{}"))
         if cursor.rowcount:
             self.connection.execute("UPDATE collections SET updated_at=CURRENT_TIMESTAMP WHERE id=?",(collection_id,))
@@ -655,7 +656,7 @@ class Database:
         if anime_id is not None:
             anime=self.anime(anime_id)
             if not anime:raise ValueError("Anime no longer exists.")
-            key=self._entity_key(anime_id,anime["anilist_id"]);metadata=anime["metadata_json"] or "{}"
+            key=self.entity_key_for_anime(anime_id);metadata=anime["metadata_json"] or "{}"
             local_key=f'local:{anime_id}'
             if self.connection.execute('SELECT 1 FROM manual_status WHERE scope=? AND entity_key=?',(scope,local_key)).fetchone():key=local_key
         elif item is not None:

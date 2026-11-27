@@ -89,9 +89,10 @@ def test_missing_state_favorites_restart_and_rescan(data):
 
 def test_duplicate_local_ids_not_merged(data,tmp_path):
     db,store,aid,sid,book=data;other=anime(db,tmp_path/'Second',11);db.set_favorite(other,True)
-    org=Organization(db,store);assert len(org.search('Shared 11'))==1
+    org=Organization(db,store);assert len(org.search('Shared 11'))==2
     assert len(org.favorites())==1;assert db.anime(aid) and db.anime(other)
-    assert org.resolve(f'local:{other}').aliases=={f'local:{aid}',f'local:{other}','anilist:11'}
+    assert org.resolve(f'local:{other}').aliases=={f'local:{other}'}
+    assert org.resolve(f'local:{other}').local['id']==other
 
 
 def test_scope_mismatch_rejected_and_membership_hidden(data,tmp_path):

@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Callable
+from .episode_identity import PICTURE_DRAMA
 
 ENDPOINT = "https://graphql.anilist.co"
 QUERY = """query ($search: String,$adult:Boolean) { Page(page:1, perPage:8) { media(search:$search, type:ANIME,isAdult:$adult) {
@@ -101,6 +102,13 @@ def search_variants(title: str, alternate_titles: tuple[str, ...] = ()) -> list[
         if len(value) >= 2 and value.casefold() not in {item.casefold() for item in variants}:
             variants.append(value)
     add(title)
+    from .episode_identity import PICTURE_DRAMA
+    if PICTURE_DRAMA.search(title):
+        add(PICTURE_DRAMA.sub('Picture Drama',title))
+        first=re.split(r'\s+[-–—:]\s+',title)[0]
+        if first!=title:
+            season=re.search(r'\bR\d+\b|\bSeason\s+\d+\b',title,re.I)
+            add(first+(' '+season.group() if season else '')+' Picture Drama')
     for alternate in alternate_titles:
         add(alternate)
     descriptor_free = re.sub(r"(?:\s*[-–—:]?\s*)\b(?:complete(?:\s+(?:series|collection|edition))?|batch)\b\s*$",
@@ -132,6 +140,8 @@ def _candidate_season(candidate: dict) -> int:
         match=re.search(r'\bseason\s*(\d+)|\b(\d+)(?:st|nd|rd|th)\s+season\b',str(value),re.I)
         if match:return int(match.group(1) or match.group(2))
     for value in values:
+        sequel=re.search(r'\bR([2-9])\b',str(value),re.I)
+        if sequel:return int(sequel.group(1))
         if re.search(r'\b(?:part|cour)\s*\d+',str(value),re.I):continue
         match=re.search(r'\s([2-9])\s*$',str(value))
         if match:return int(match.group(1))
@@ -210,8 +220,12 @@ def evaluate_candidate(search,candidate,season=None,year=None,count=None,alterna
     local_text=' '.join(str(v) for v in (search,*alternates)).casefold()
     for qualifier in ('picture drama','prologue','recap','compilation','digest'):
         if any(qualifier in str(value).casefold() for value in values) and qualifier not in local_text:reasons.append('Unrequested '+qualifier+' release.')
+    from .episode_identity import PICTURE_DRAMA
+    special=bool(PICTURE_DRAMA.search(local_text)) or format_hint=='PICTURE_DRAMA'
+    if not special and any(PICTURE_DRAMA.search(str(v)) for v in values):reasons.append('Unrequested picture/visual drama release.')
+    if special and not any(PICTURE_DRAMA.search(str(v)) for v in values):reasons.append('Explicit picture/visual drama identity is missing from candidate.')
     kind=candidate.get('format')
-    allowed={'SERIES':{'TV','TV_SHORT','ONA'},'MOVIE':{'MOVIE'},'OVA':{'OVA','ONA','SPECIAL'},'SPECIAL':{'SPECIAL','OVA','ONA'}}
+    allowed={'PICTURE_DRAMA':{'SPECIAL','OVA','ONA'},'SERIES':{'TV','TV_SHORT','ONA'},'MOVIE':{'MOVIE'},'OVA':{'OVA','ONA','SPECIAL'},'SPECIAL':{'SPECIAL','OVA','ONA'}}
     if format_hint in allowed and kind and kind not in allowed[format_hint]:reasons.append('Incompatible media format.')
     shared=max((len(anchor & (_words(v)-MATCH_GENERIC)) for anchor in anchors for v in values if v),default=0)
     if not shared:reasons.append('Franchise title conflicts with the local release.')
@@ -250,7 +264,7 @@ class AniListClient:
                 body=getattr(self,'query_cache',{}).get(variant)
                 if body is None:
                     try:
-                        response=(self.scheduler or get_scheduler()).request(QUERY,{'search':variant,'adult':self.scope=='restricted'},scope=self.scope,origin=self.origin,priority=self.priority,force=self.force,wait=self.wait,max_retries=self.max_retries,cancel=cancel_callback,status=self.status_callback)
+                        response=(self.scheduler or get_scheduler()).request(QUERY.replace('type:ANIME,isAdult:$adult','type:ANIME,isAdult:$adult,format_in:[SPECIAL,OVA,ONA]') if detected_format=='PICTURE_DRAMA' or PICTURE_DRAMA.search(title) else QUERY,{'search':variant,'adult':self.scope=='restricted'},scope=self.scope,origin=self.origin,priority=self.priority,force=self.force,wait=self.wait,max_retries=self.max_retries,cancel=cancel_callback,status=self.status_callback)
                         body=response.payload;report.http_status=response.status;report.requests+=response.requests;report.cache_hits+=int(response.cached);report.request_attempted|=response.requests>0;report.retry_count+=response.retries;report.rate_limited|=response.rate_limited
                     except Deferred as exc:
                         report.failure_kind=exc.kind;report.next_retry=exc.retry_at;report.http_status=exc.status;report.requests+=exc.attempts;report.request_attempted|=exc.attempts>0;report.retry_count+=exc.retries

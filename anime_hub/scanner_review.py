@@ -38,7 +38,7 @@ class ScannerReview(QDialog):
         self.queue_timer=QTimer(self);self.queue_timer.setInterval(1500);self.queue_timer.timeout.connect(self.refresh_queue_status);self.queue_timer.start();self.refresh_queue_status()
         columns=QHBoxLayout();self.sources=QListWidget();self.sources.setMinimumWidth(310);columns.addWidget(self.sources,2)
         right=QVBoxLayout();self.details=QTextEdit();self.details.setReadOnly(True);right.addWidget(self.details,2)
-        search=QHBoxLayout();self.query=QLineEdit();self.query.setPlaceholderText('Search AniList manually…');search.addWidget(self.query);self.search_button=QPushButton('Search / Retry');self.search_button.clicked.connect(self.search);self.query.returnPressed.connect(self.search);search.addWidget(self.search_button);right.addLayout(search)
+        search=QHBoxLayout();self.query=QLineEdit();self.query.setPlaceholderText('Search title, AniList ID, or anime URL…');search.addWidget(self.query);self.search_button=QPushButton('Search / Retry');self.search_button.clicked.connect(self.search);self.query.returnPressed.connect(self.search);search.addWidget(self.search_button);right.addLayout(search)
         self.candidates=QListWidget();self.candidates.setIconSize(QSize(64,92));right.addWidget(self.candidates,3)
         actions=QHBoxLayout();self.confirm=QPushButton('Confirm selected match');self.confirm.setObjectName('primary');self.confirm.clicked.connect(self.apply);actions.addWidget(self.confirm)
         leave=QPushButton('Leave unmatched');leave.clicked.connect(lambda:self.apply(unmatched=True));actions.addWidget(leave)
@@ -87,7 +87,7 @@ class ScannerReview(QDialog):
             path=Path(media['path'])
             try:name=str(path.relative_to(base))
             except ValueError:name=path.name
-            lines.append(f"• {name} · S{media['season']} E{media['episode']}"+(f"–{media['episode_end']}" if media['episode_end'] else '')+(' · Unavailable' if not media['present'] else ''))
+            lines.append(f"• {name} · S{media['season']} E{media['episode_label'] if media['episode_label'] is not None else media['episode']}"+(f"–{media['episode_end']}" if media['episode_end'] else '')+(' · Unavailable' if not media['present'] else ''))
         lines.extend(state.safe_json(source['warnings']) or [])
         for decision in report.get('decisions',[]):lines.append(f"Candidate {decision.get('id')}: {decision.get('reason')}")
         self.details.setPlainText('\n'.join(str(v) for v in lines));self.query.setText(row['title']);self.show_candidates(report.get('candidates',[]))
@@ -125,7 +125,13 @@ class ScannerReview(QDialog):
         if not query:return
         def work():
             client=AniListClient(max_retries=1,should_cancel=lambda:self.window._closing,scope=self.scope,origin='manual-rematch',priority=0,force=True)
-            report=client.lookup(query,target['season'] if query==target['title'] else None,detected_format=(target.get('format_hint') or parsed['format_hint']) if query==target['title'] else None,detected_part=parsed['part'] if query==target['title'] else None)
+            from .metadata import fetch_anilist_id,LookupReport
+            import re
+            direct=re.fullmatch(r'(?:https://anilist\.co/anime/)?([1-9][0-9]*)(?:/[^?]*)?',query)
+            if direct:
+                item=fetch_anilist_id(int(direct.group(1)),scope=self.scope,wait=True,origin='manual-id')
+                report=LookupReport(query,candidates=[item],failure_reason='Direct AniList ID loaded. Confirm to apply to this local source.')
+            else:report=client.lookup(query,target['season'] if query==target['title'] else None,detected_format=(target.get('format_hint') or parsed['format_hint']) if query==target['title'] else None,detected_part=parsed['part'] if query==target['title'] else None)
             cache=self.window.db.path.parent/'cache'/('restricted_artwork' if self.scope=='restricted' else 'artwork')
             candidates=[]
             for item in report.candidates:

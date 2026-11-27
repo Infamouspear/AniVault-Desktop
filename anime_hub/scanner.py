@@ -138,6 +138,8 @@ def _scan(root: Path, db, progress=lambda *_: None, diagnostics_path: Path | Non
                 if candidate.kind in {"other","movie","special"}:
                     candidate.kind="episode"; candidate.season=parsed_title.season; candidate.episode=episode
                     candidate.reason="primary playable video fallback (deterministic order)"
+        from .episode_identity import assign_labels
+        assign_labels(parsed_media,parsed_title.format_hint=='PICTURE_DRAMA')
         for parsed_file in parsed_media:
             file=parsed_file.path
             db.upsert_media(anime_id, parsed_file)
@@ -162,6 +164,8 @@ def _scan(root: Path, db, progress=lambda *_: None, diagnostics_path: Path | Non
                             f"Episode count: {episode_count}", f"Extras count: {extras_count}",
                             *classification_notes])
         previous=state.source_state(db,anime_id)
+        if previous['locked']:
+            state.record(db,anime_id,state=previous['state'],report=state.safe_json(previous['report']),part=parsed_title.part,format_hint=parsed_title.format_hint,commit=False)
         if not previous['locked']:
             reason='Shared release folder: review individual files.' if mixed else 'No AniList match yet.'
             level='Needs Review' if mixed else 'Unmatched'
@@ -191,8 +195,9 @@ def _scan(root: Path, db, progress=lambda *_: None, diagnostics_path: Path | Non
         if mixed:mixed_ids.add(anime_id)
         previous=state.source_state(db,anime_id)
         preserved=state.safe_json(previous['report'])
-        state.record(db,anime_id,state=level if not preserved.get('candidates') else previous['state'],report=preserved if preserved.get('query')==parsed.title else details,part=parsed.part,format_hint=parsed.format_hint,commit=False)
+        state.record(db,anime_id,state=level if level=='Needs Review' or not preserved.get('candidates') else previous['state'],report=preserved if level!='Needs Review' and preserved.get('query')==parsed.title else details,part=parsed.part,format_hint=parsed.format_hint,commit=False)
 
+    state.flag_duplicate_matches(db)
     db.finish_scan()
     db.last_scan_completed=True
     from . import metadata_jobs as jobs

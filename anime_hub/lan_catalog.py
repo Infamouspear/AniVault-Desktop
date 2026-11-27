@@ -91,7 +91,7 @@ class Catalog:
         return result
 
     def episode(self, row):
-        return fields(row, ('id', 'anime_id', 'kind', 'season', 'episode', 'present', 'watched', 'resume_position_ms', 'watched_at'))
+        return fields(row, ('id', 'anime_id', 'kind', 'season', 'episode', 'episode_label', 'present', 'watched', 'resume_position_ms', 'watched_at'))
 
     def volume(self, row):
         return fields(row, ('id', 'series_id', 'volume', 'chapter', 'display_name', 'source_type', 'present', 'current_page', 'total_pages', 'completed', 'percent_complete', 'last_read_at'))

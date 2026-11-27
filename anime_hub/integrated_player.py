@@ -39,14 +39,14 @@ def track_label(description, kind: str, ordinal: int) -> str:
 TECHNICAL_SUFFIX=re.compile(r"\b(?:2160p|1080p|720p|480p|blu[- .]?ray|b[dr]rip|remux|web[- .]?(?:dl|rip)|hevc|avc|x26[45]|h\.?26[45]|10[- ]?bit|8[- ]?bit|flac|aac|opus|dual[- ]?audio|multi[- ]?subs?)\b",re.I)
 
 
-def clean_episode_label(path: str, episode: int | None = None, metadata_title: str = "") -> str:
+def clean_episode_label(path: str, episode: int | str | None = None, metadata_title: str = "") -> str:
     """Create a viewer-facing title without exposing a release filename."""
     candidate=(metadata_title or "").strip()
     if not candidate:
         stem=Path(path).stem
-        marker=re.search(r"\bS\d{1,2}E\d{1,4}(?:v\d+)?\b",stem,re.I)
+        marker=re.search(r"\bS\d{1,2}E\d{1,4}(?:\.\d+)?(?:v\d+)?\b",stem,re.I)
         if not marker and episode is not None:
-            marker=re.search(rf"(?:^|[ ._-])(?:Episode|Ep|E)?\s*0*{episode}(?=[ ._-]|$)",stem,re.I)
+            marker=re.search(rf"(?:^|[ ._-])(?:Episode|Ep|E)?\s*0*{re.escape(str(episode))}(?=[ ._-]|$)",stem,re.I)
         candidate=stem[marker.end():] if marker else ""
     candidate=re.split(r"\[[^\]]*\]|\([0-9a-f]{8}\)",candidate,1,flags=re.I)[0]
     technical=TECHNICAL_SUFFIX.search(candidate)

@@ -47,7 +47,7 @@ class Entity:
 
 class Organization:
     def __init__(self,db,manga_store,scope='normal'):
-        self.db=db;self.manga=manga_store;self.scope=scope;self.entities={};self.by_key={}
+        self.db=db;self.manga=manga_store;self.scope=scope;self.entities={};self.by_key={};self.local_by_key={}
         availability=dict(db.connection.execute("SELECT anime_id,SUM(CASE WHEN present=1 AND kind='episode' THEN 1 ELSE 0 END) FROM media GROUP BY anime_id"))
         anime_rows=db.anime_list();scopes=db.anime_scope_map(anime_rows)
         self.private_anilist_ids={row['anilist_id'] for row in db.anime_list(include_retired=True) if db.anime_scope(row,fresh=False)=='restricted' and row['anilist_id']}
@@ -87,11 +87,32 @@ class Organization:
             entity=self.resolve(row['entity_key'],metadata(row['metadata_json']))
             if entity and (entity.status is None or row['entity_key']==entity.key):entity.status=row['status']
 
+        status_keys={r['entity_key']:r['status'] for r in statuses}
+        for entity in self.local_by_key.values():
+            remote='anilist:'+str(entity.local.get('anilist_id'))
+            entity.status=status_keys.get(entity.key,status_keys.get(remote))
+            entity.saved=remote in self.explicit_saved
+        counts={}
+        for entity in self.local_by_key.values():
+            remote=entity.local.get('anilist_id')
+            if remote:counts[(entity.media_type,int(remote))]=counts.get((entity.media_type,int(remote)),0)+1
+        for entity in [*self.local_by_key.values(),*self.entities.values()]:
+            if entity.local and counts.get((entity.media_type,entity.local.get('anilist_id')),0)>1:
+                entity.aliases.discard('anilist:'+str(entity.local['anilist_id']))
+        for entity in self.entities.values():
+            if entity.local:
+                exact=self.local_by_key.get((entity.media_type,entity.key))
+                if exact:entity.status=exact.status;entity.saved=exact.saved
+
     def _logical(self,entity):
+        if entity.local:return (entity.media_type,entity.key)
         identifier=entity.local.get('anilist_id') if entity.local else entity.item.get('id')
         return (entity.media_type,int(identifier)) if identifier and entity.media_type!='EXTERNAL' else (entity.media_type,entity.key)
 
     def _local(self,entity):
+        if entity.local:
+            from dataclasses import replace
+            self.local_by_key[(entity.media_type,entity.key)]=replace(entity,local=dict(entity.local),aliases=set(entity.aliases))
         logical=self._logical(entity)
         prior=self.entities.get(logical)
         if prior:
@@ -107,6 +128,14 @@ class Organization:
     def resolve(self,key,item=None):
         if key in self.retired_aliases and key not in self.explicit_saved:return None
         item=metadata(item)
+        if key.startswith(('local:','manga:')):
+            return self.local_by_key.get(('MANGA' if key.startswith('manga:') else 'ANIME',key))
+        if key.startswith('anilist:'):
+            locals=[e for (kind,alias),e in self.local_by_key.items() if str(e.local.get('anilist_id'))==key.split(':',1)[1] and (not item or kind==media_type(item))]
+            if len(locals)>1:
+                chosen=item or locals[0].item
+                if (chosen.get('isAdult') is True)!=(self.scope=='restricted'):return None
+                return Entity(key,media_type(chosen),self.scope,chosen,aliases={key})
         if not item:
             matches=[entity for (kind,alias),entity in self.by_key.items() if alias==key]
             if len(matches)==1:return matches[0]

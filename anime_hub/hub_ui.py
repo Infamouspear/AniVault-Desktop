@@ -1,4 +1,5 @@
 """V0.9 presentation shell. Uses existing identities, caches and playback routes."""
+from .episode_identity import display_episode
 import json, weakref
 from pathlib import Path
 from PySide6.QtCore import Qt, QEvent, QObject, QTimer, QSize
@@ -189,7 +190,7 @@ class DetailRail(QFrame):
                 rows=[dict(row) for row in self.window.db.media(local['id']) if row['kind']=='episode' and row['present']];current=self.window.db.next_unwatched(local['id']);index=next((i for i,row in enumerate(rows) if current and row['id']==current['id']),max(0,len(rows)-1));rows=rows[max(0,index-1):index+2]
                 if rows:heading=QLabel('EPISODE PREVIEW');heading.setObjectName('eyebrow');pl.addWidget(heading)
                 for row in rows:
-                    name=('✓  ' if row['watched'] else '▶  ')+clean_episode_label(row['path'],row['episode']);button=QPushButton(QFontMetrics(self.font()).elidedText(name,Qt.ElideRight,255));button.setToolTip(name);button.clicked.connect(lambda _,r=row:self.window.play(r['path'],r['id'],local['id']));pl.addWidget(button)
+                    name=('✓  ' if row['watched'] else '▶  ')+clean_episode_label(row['path'],display_episode(row));button=QPushButton(QFontMetrics(self.font()).elidedText(name,Qt.ElideRight,255));button.setToolTip(name);button.clicked.connect(lambda _,r=row:self.window.play(r['path'],r['id'],local['id']));pl.addWidget(button)
             layout.addWidget(preview)
         cached=getattr(self.window,'_detail_relation_cache',{}).get((entity.scope,entity.media_type,item.get('id')));relations=(cached[1] if cached else item.get('relations') or {}).get('edges') or [];seen=set()
         for edge in relations:

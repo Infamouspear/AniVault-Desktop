@@ -28,6 +28,7 @@ from PySide6.QtWidgets import QGraphicsOpacityEffect
 from PySide6.QtWidgets import QInputDialog
 
 from .version import APP_VERSION, APP_USER_MODEL_ID
+from .episode_identity import display_episode,unique_anilist_rows
 from .icons import NAV_ICONS, outline_icon
 from .release_safety import prepare_existing_database, record_release, splash_preferences
 from .media_cards import POSTER_WIDTH,POSTER_HEIGHT,POSTER_CARD_WIDTH,poster_layout,CARD_WIDTH,CARD_HEIGHT,COVER_WIDTH,COVER_HEIGHT,media_layout,text_slot,footer_slot,ContainedListWidget
@@ -1300,7 +1301,7 @@ class Window(MetadataQueueMixin,ScannerReviewMixin,AiringUpdatesMixin,HubMixin,L
         if not anime: return
         menu=QMenu(self); next_episode=self.db.next_unwatched(anime_id)
         if next_episode:
-            episode=next_episode["episode"] if next_episode["episode"] is not None else "Next"
+            episode=display_episode(next_episode) if next_episode["episode"] is not None else "Next"
             play=menu.addAction(f"Continue Watching Episode {episode}"); play.triggered.connect(lambda:self.continue_episode(anime_id))
         details=menu.addAction("Open Details"); details.triggered.connect(lambda:self.show_detail(anime_id))
         favorite=menu.addAction("Remove Favorite" if anime["favorite"] else "Add Favorite")
@@ -1555,7 +1556,7 @@ class Window(MetadataQueueMixin,ScannerReviewMixin,AiringUpdatesMixin,HubMixin,L
         if ids:
             def render(items):
                 if self.current_view!="franchise_detail" or self._franchise_session!=session or not self.db.franchise(franchise_id):return
-                status.setText(f"{len(items)} direct relation suggestion(s)");local={int(row["anilist_id"]):row for row in self.db.anime_list() if row["anilist_id"]}
+                status.setText(f"{len(items)} direct relation suggestion(s)");local=unique_anilist_rows(self.db.anime_list())
                 member_ids={row["id"] for row in self.db.franchise_anime(franchise_id)}
                 for item in sorted(items,key=lambda item:not bool(local.get(int(item['id'])))):
                     if item.get('isAdult') is True:continue
@@ -1932,7 +1933,7 @@ class Window(MetadataQueueMixin,ScannerReviewMixin,AiringUpdatesMixin,HubMixin,L
         if restricted:self._section_page_cache["restricted_saved"]=page
         self.replace(page)
         def render():
-            grid.clear_cards(); local={int(row["anilist_id"]):row for row in self.db.anime_list() if row["anilist_id"]}; cards=[]
+            grid.clear_cards(); local=unique_anilist_rows(self.db.anime_list()); cards=[]
             for row in ([] if restricted else self.db.saved_titles(sort.currentText(),scope)):
                 try:item=json.loads(row["metadata_json"])
                 except Exception:continue
@@ -2007,7 +2008,7 @@ class Window(MetadataQueueMixin,ScannerReviewMixin,AiringUpdatesMixin,HubMixin,L
             if self.current_view==view_name and self.stack.currentWidget() is page:
                 genre_picker.set_options(options.get("genres") or []); tag_picker.set_options([tag.get("name") for tag in options.get("tags") or [] if tag.get("name")])
         self._request_discover_filters(landing_filters_loaded,restricted)
-        local={} if media_type=="MANGA" else {int(row["anilist_id"]):row for row in self.db.anime_list() if row["anilist_id"]}
+        local={} if media_type=="MANGA" else unique_anilist_rows(self.db.anime_list())
         recommendation=self._recommendation_profile(scope,media_type)
         page.setProperty("recommendationFingerprint",recommendation.fingerprint);page.setProperty("recommendationBuiltAt",time.time())
         rec_spec=recommendation.query()
@@ -2103,7 +2104,7 @@ class Window(MetadataQueueMixin,ScannerReviewMixin,AiringUpdatesMixin,HubMixin,L
         filters.setSpacing(6);outer.setSpacing(8)
         chips=QLabel(); chips.setObjectName("muted"); filters.addWidget(chips); outer.addLayout(filters)
         scroll=QScrollArea(); scroll.setWidgetResizable(True); host=QWidget(); host_layout=QVBoxLayout(host); grid=ResponsiveSeasonGrid([],context=f"Discover: {heading}"); host_layout.addWidget(grid); status=QLabel(); status.setObjectName("muted"); host_layout.addWidget(status,0,Qt.AlignHCenter); host_layout.addStretch(); scroll.setWidget(host); outer.addWidget(scroll); self.replace(page)
-        local={} if media_type=="MANGA" else {int(row["anilist_id"]):row for row in self.db.anime_list() if row["anilist_id"]}; state={"page":0,"has_next":True,"loading":False,"ids":set(),"retry":0}
+        local={} if media_type=="MANGA" else unique_anilist_rows(self.db.anime_list()); state={"page":0,"has_next":True,"loading":False,"ids":set(),"retry":0}
         def values():
             integer=lambda text:int(text) if text.strip().isdigit() else None
             selected_sort=sort_map[sort_box.currentText()]
@@ -2382,7 +2383,7 @@ class Window(MetadataQueueMixin,ScannerReviewMixin,AiringUpdatesMixin,HubMixin,L
         _append_playback_log(f"Airing opened main_window_size={self.width()}x{self.height()} page_size={page.width()}x{page.height()} viewport_size={scroll.viewport().width()}x{scroll.viewport().height()}")
         self._schedule_airing_reflow()
         status=QLabel("Vee is checking the current AniList season…"); status.setObjectName("muted"); outer.addWidget(status)
-        rows=self.db.anime_list(); by_anilist={int(row["anilist_id"]):row for row in rows if row["anilist_id"] is not None and self.db.anime_scope(row,fresh=False)=="normal"}
+        rows=self.db.anime_list(); by_anilist=unique_anilist_rows([row for row in rows if self.db.anime_scope(row,fresh=False)=="normal"])
 
         rendered={"value":False}
         def render(catalog,source):
@@ -2471,7 +2472,7 @@ class Window(MetadataQueueMixin,ScannerReviewMixin,AiringUpdatesMixin,HubMixin,L
     def show_airing_all(self,heading,items,query_spec=None,initial_page_result=None):
         session_id=time.monotonic_ns(); self._airing_session_id=session_id
         self.current_view="airing_all"; self.current_anime_id=None; self._set_active_nav("airing")
-        items=list(items); rows=self.db.anime_list(); by_anilist={int(row["anilist_id"]):row for row in rows if row["anilist_id"] is not None}; item_map={int(item["id"]):item for item in items}
+        items=list(items); rows=self.db.anime_list(); by_anilist=unique_anilist_rows(rows); item_map={int(item["id"]):item for item in items}
         page=QWidget(); outer=QVBoxLayout(page); outer.setContentsMargins(22,18,22,18); self._top_header(outer)
         top=QHBoxLayout(); back=QPushButton("←  Airing"); back.clicked.connect(self.show_airing); top.addWidget(back); title=QLabel(heading); title.setObjectName("title"); top.addWidget(title); top.addStretch(); outer.addLayout(top)
         filters=QHBoxLayout(); search=QLineEdit(); search.setPlaceholderText("Filter titles…"); filters.addWidget(search,2)
@@ -2714,7 +2715,7 @@ class Window(MetadataQueueMixin,ScannerReviewMixin,AiringUpdatesMixin,HubMixin,L
         progress=QProgressBar(); progress.setRange(0,max(len(normal),1)); progress.setValue(watched); progress.setTextVisible(False); progress.setMaximumWidth(760); content.addWidget(progress)
         actions=QHBoxLayout(); next_episode=self.db.next_unwatched(anime_id)
         if next_episode:
-            continue_button=QPushButton(f"▶  Continue Episode {next_episode['episode']}"); continue_button.setObjectName("primary"); continue_button.clicked.connect(lambda:self.continue_episode(anime_id)); actions.addWidget(continue_button)
+            continue_button=QPushButton(f"▶  Continue Episode {display_episode(next_episode)}"); continue_button.setObjectName("primary"); continue_button.clicked.connect(lambda:self.continue_episode(anime_id)); actions.addWidget(continue_button)
         folder=QPushButton("▣  Open Folder"); folder.clicked.connect(lambda:self.open_folder(anime["root_path"])); actions.addWidget(folder)
         favorite=QPushButton("♥  Favorited" if anime["favorite"] else "♡  Favorite"); favorite.clicked.connect(lambda:self.toggle_favorite(anime_id,not anime["favorite"])); actions.addWidget(favorite);actions.addWidget(self._detail_collections_button(scope,anime_id=anime_id)); actions.addStretch(); content.addLayout(actions); from .ratings import rating_control; content.addWidget(rating_control(self,scope,"ANIME",anime_id)); hero_layout.addLayout(content,1); outer.addWidget(hero)
 
@@ -2732,9 +2733,9 @@ class Window(MetadataQueueMixin,ScannerReviewMixin,AiringUpdatesMixin,HubMixin,L
         lists=QHBoxLayout(); episodes=ContainedListWidget(); extras=ContainedListWidget(); next_id=next_episode["id"] if next_episode else None
         for m in media:
             if m["kind"]=="episode":
-                number=f"{m['episode']:02d}" if m["episode"] is not None else "—"
+                number=str(display_episode(m)) if display_episode(m) is not None else "—"
                 titles=metadata.get("episode_titles") or {}; explicit=titles.get(str(m["episode"])) or titles.get(m["episode"]) or ""
-                label=f"{'●' if m['watched'] else '▶' if m['id']==next_id else '○'}   {number}   {clean_episode_label(m['path'],m['episode'],explicit)}"
+                label=f"{'●' if m['watched'] else '▶' if m['id']==next_id else '○'}   {number}   {clean_episode_label(m['path'],display_episode(m),explicit)}"
                 item=QListWidgetItem(label); item.setData(Qt.UserRole,m["path"]); item.setData(Qt.UserRole+1,m["id"]); item.setData(Qt.UserRole+2,m["kind"])
                 if m["watched"]: item.setForeground(QColor("#9a8296"))
                 elif m["id"]==next_id: item.setForeground(QColor("#ff6a96"))
@@ -3153,7 +3154,7 @@ class Window(MetadataQueueMixin,ScannerReviewMixin,AiringUpdatesMixin,HubMixin,L
             if choice is None:return
             if choice!="resume":resume_ms=0
         title=self._display_title(anime) if anime is not None else "AniVault Player"
-        episode_number=media["episode"] if media and media["episode"] is not None else None
+        episode_number=display_episode(media) if media and media["episode"] is not None else None
         metadata=json.loads(anime["metadata_json"] or "{}") if anime is not None else {}
         episode_titles=metadata.get("episode_titles") or {}
         metadata_title=(episode_titles.get(str(episode_number)) or episode_titles.get(episode_number) or "") if episode_number is not None else ""
@@ -3252,7 +3253,7 @@ class Window(MetadataQueueMixin,ScannerReviewMixin,AiringUpdatesMixin,HubMixin,L
         if self.db.setting("autoplay_next","0")=="1":
             target=self.db.adjacent_episode(anime_id,media_id,1)
             if target:
-                self.statusBar().showMessage(f"Loading Episode {target['episode']}…",3000); self._stop_integrated_player(save_resume=False,reason="episode change"); QTimer.singleShot(500,lambda:self.play_integrated(target["path"],target["id"],anime_id)); return
+                self.statusBar().showMessage(f"Loading Episode {display_episode(target)}…",3000); self._stop_integrated_player(save_resume=False,reason="episode change"); QTimer.singleShot(500,lambda:self.play_integrated(target["path"],target["id"],anime_id)); return
         self.db.set_resume_position(media_id,0)
 
     def _integrated_error(self,path,details):

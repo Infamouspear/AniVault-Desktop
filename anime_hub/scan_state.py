@@ -26,6 +26,7 @@ def backup(db,reason='scan'):
 def migrate(db):
     c=db.connection
     if not c.execute("SELECT 1 FROM sqlite_master WHERE name='scan_sources'").fetchone() and c.execute('SELECT 1 FROM anime LIMIT 1').fetchone():backup(db,'pre-scanner')
+    if 'episode_label' not in {r[1] for r in c.execute('PRAGMA table_info(media)')} and c.execute('SELECT 1 FROM media LIMIT 1').fetchone():backup(db,'pre-episode-identifiers')
     if 'active' not in {r[1] for r in c.execute('PRAGMA table_info(anime)')} and c.execute('SELECT 1 FROM anime LIMIT 1').fetchone():backup(db,'pre-reconciliation')
     with c:
         if not c.in_transaction:c.execute('BEGIN')
@@ -42,7 +43,7 @@ def migrate(db):
           id INTEGER PRIMARY KEY,anime_id INTEGER NOT NULL,media_id INTEGER,previous_id INTEGER,
           previous_metadata TEXT NOT NULL,action TEXT NOT NULL,created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)""")
         columns={r[1] for r in c.execute('PRAGMA table_info(media)')}
-        for name,kind in [('file_identity','TEXT'),('episode_end','INTEGER')]:
+        for name,kind in [('file_identity','TEXT'),('episode_end','INTEGER'),('episode_label','TEXT')]:
             if name not in columns:c.execute(f'ALTER TABLE media ADD COLUMN {name} {kind}')
         c.execute('CREATE INDEX IF NOT EXISTS media_file_identity ON media(file_identity)')
         columns={r[1] for r in c.execute('PRAGMA table_info(anime)')}
@@ -136,7 +137,7 @@ def manual_match(db,anime_id,item=None,media_id=None,scope='normal',clear=False)
             db.connection.execute('UPDATE scan_file_matches SET anilist_id=?,metadata_json=?,state=?,locked=? WHERE media_id=?',(item['id'] if item else None,json.dumps(item or {}),'Manual' if item else 'Unmatched',int(not clear),media_id))
         else:
             # Attach existing user choices to the stable local ID before changing a remote alias.
-            old_key=db.entity_key_for_anime(anime_id);local_key=f'local:{anime_id}'
+            old_key=db._entity_key(anime_id,row['anilist_id']);local_key=f'local:{anime_id}'
             if old_key!=local_key:
                 shared=db.connection.execute('SELECT 1 FROM anime WHERE anilist_id=? AND id<>?',(row['anilist_id'],anime_id)).fetchone()
                 for link in db.connection.execute('SELECT * FROM collection_entries WHERE entity_key=?',(old_key,)).fetchall():
@@ -202,3 +203,15 @@ def audit(db,scope='normal'):
         record(db,row['id'],state=level,report={'query':parsed.title,'reason':reason,'candidates':[]},warnings=warnings,part=parsed.part,format_hint=parsed.format_hint)
         count+=1
     return count
+
+
+def flag_duplicate_matches(db):
+    groups={}
+    for row in db.anime_list():
+        if row['anilist_id']:groups.setdefault((db.anime_scope(row,fresh=False),row['anilist_id']),[]).append(row)
+    marker='AniList identity is shared by independent local sources; review the associations.'
+    for rows in groups.values():
+        for row in rows:
+            saved=source_state(db,row['id']);warnings=[w for w in safe_json(saved['warnings']) or [] if w!=marker]
+            if len(rows)>1:warnings.append(marker)
+            db.connection.execute('UPDATE scan_sources SET warnings=? WHERE anime_id=?',(json.dumps(warnings),row['id']))
