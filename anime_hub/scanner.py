@@ -155,9 +155,11 @@ def _scan(root: Path, db, progress=lambda *_: None, diagnostics_path: Path | Non
             if not clearly_extra: primary.append(item)
         if len(primary) == 1:
             item = primary[0]
-            if (item.reason == "bare numbered-video fallback"
+            if (item.reason in {"bare numbered-video fallback", "explicit episode identifier"}
+                    and not (item.episode_label == "0")
                     and parse_title(item.path.stem).title.casefold() == parsed_title.title.casefold()):
                 item.episode = 1
+                item.episode_label = None
                 item.reason = "single video whose name matches the release"
         if (parsed_title.format_hint is None and primary and all(
                 item.kind == "special" and re.search(r"\b(?:OVA|OAD)\b", item.path.stem, re.I)

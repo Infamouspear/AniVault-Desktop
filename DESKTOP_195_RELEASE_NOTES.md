@@ -34,3 +34,5 @@ Old shared remote statuses/memberships cannot always be attributed to one local 
 The candidate is not automatically installed or published. Update publication is a separate step, and 1.9.4 remains available for rollback.
 
 This release integrates the already-published 1.9.4 scanner classification, alternate-version handling, bounded metadata retries and offline preview improvements with the local identity and exact episode-label fixes. The existing 1.9.4 release/tag is preserved.
+
+The integration preserves the single-video title fallback: a release named with an integer such as Stage 2 stays episode 1 when its one filename is the title. Actual source identifiers, including zero and fractional Stage/Turn labels, retain their labels.
