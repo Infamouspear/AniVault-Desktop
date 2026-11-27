@@ -134,14 +134,14 @@ def summary(db,now=None):
     completed=sum(r['state']=='completed' for r in rows);unresolved=sum(r['state']=='unresolved' for r in rows)
     pending=sum(r['state'] in {'pending','running','deferred'} for r in rows)
     failed=sum(r['failed_requests'] for r in rows)
-    times=[r['next_at'] for r in rows if r['state'] in {'pending','deferred','unresolved'} ]
+    times=[r['next_at'] for r in rows if r['state'] in {'pending','deferred'} or (r['state']=='unresolved' and r['next_at']>0)]
     timing=db.connection.execute("SELECT duration_ms FROM metadata_job_metrics WHERE scope='normal'").fetchone()
     return {'processing_ms':timing[0] if timing else 0,'pending':pending,'completed':completed,'unresolved':unresolved,'failed':failed,'next_retry':min(times) if times else None,'paused':db.setting('metadata_paused','0')=='1','waiting_reasons':sorted({r['outcome'] for r in rows if r['state']=='deferred'})}
 
 
 def next_due(db,scheduler=None):
     scheduler=scheduler or get_scheduler();times=[]
-    for row in db.connection.execute("SELECT operation,next_at FROM metadata_jobs WHERE scope='normal' AND state IN ('pending','deferred','unresolved')"):
+    for row in db.connection.execute("SELECT operation,next_at FROM metadata_jobs WHERE scope='normal' AND (state IN ('pending','deferred') OR (state='unresolved' AND next_at>0))"):
         times.append(max(row['next_at'],scheduler.eligible_at() if row['operation']!='artwork' else 0))
     return min(times) if times else None
 
@@ -161,7 +161,7 @@ def progress_text(db):
 def _claim(db,now):
     with db.connection:
         db.connection.execute('BEGIN IMMEDIATE')
-        row=db.connection.execute("""SELECT * FROM metadata_jobs WHERE scope='normal' AND state IN ('pending','deferred','unresolved') AND next_at<=?
+        row=db.connection.execute("""SELECT * FROM metadata_jobs WHERE scope='normal' AND (state IN ('pending','deferred') OR (state='unresolved' AND next_at>0)) AND next_at<=?
           ORDER BY CASE operation WHEN 'identify' THEN CASE WHEN media_id IS NULL THEN 10 ELSE 15 END WHEN 'media' THEN 20 ELSE 30 END,updated LIMIT 1""",(now,)).fetchone()
         if not row:return None
         db.connection.execute("UPDATE metadata_jobs SET state='running',owner=?,lease_until=? WHERE scope=? AND target=? AND operation=? AND revision=?",(os.getpid(),now+120,row['scope'],row['target'],row['operation'],row['revision']))
@@ -172,10 +172,10 @@ def _valid(db,job):
     current=db.connection.execute('SELECT * FROM metadata_jobs WHERE scope=? AND target=? AND operation=?',(job['scope'],job['target'],job['operation'])).fetchone()
     if not current or current['revision']!=job['revision'] or not db.anime(job['anime_id']) or not db.anime(job['anime_id'])['active'] or db.anime_scope(job['anime_id'])!='normal':return False
     if job['media_id']:
-        source=db.connection.execute('SELECT f.locked,m.anime_id FROM scan_file_matches f JOIN media m ON m.id=f.media_id WHERE f.media_id=?',(job['media_id'],)).fetchone()
-        return bool(source and not source[0] and source['anime_id']==job['anime_id'])
+        source=db.connection.execute('SELECT f.locked,m.anime_id, m.present FROM scan_file_matches f JOIN media m ON m.id=f.media_id WHERE f.media_id=?',(job['media_id'],)).fetchone()
+        return bool(source and not source[0] and source['anime_id']==job['anime_id'] and source['present'])
     if job['operation']!='identify':return db.anime(job['anime_id'])['anilist_id']==json.loads(job['payload']).get('id')
-    return not state.source_state(db,job['anime_id'])['locked']
+    return not db.anime(job['anime_id'])['anilist_id'] and not state.source_state(db,job['anime_id'])['locked']
 
 
 def _finish(db,job,status,outcome,next_at=0,failed_requests=0):
@@ -183,12 +183,12 @@ def _finish(db,job,status,outcome,next_at=0,failed_requests=0):
       (status,outcome,next_at,failed_requests,time.time(),job['scope'],job['target'],job['operation'],job['revision']))
 
 
-def process(db,*,lookup=None,scheduler=None,should_cancel=lambda:False,status=lambda _:None,max_jobs=8,include_artwork=True):
+def process(db,*,lookup=None,scheduler=None,should_cancel=lambda:False,status=lambda _:None,max_jobs=8,include_artwork=True,max_seconds=20):
     from .metadata import AniListClient,lookup_anilist,fetch_anilist_id,cache_artwork
     lookup=lookup or lookup_anilist;scheduler=scheduler or get_scheduler();recover(db)
     client=AniListClient(scheduler=scheduler,max_retries=0,wait=False,origin='scanner',should_cancel=should_cancel,status_callback=status)
     applied=processed=0;started=time.monotonic()
-    while processed<max_jobs and not should_cancel() and time.monotonic()-started<20:
+    while processed<max_jobs and not should_cancel() and time.monotonic()-started<max_seconds:
         if db.setting('metadata_paused','0')=='1':break
         job=_claim(db,scheduler.clock())
         if not job:break
@@ -222,7 +222,7 @@ def process(db,*,lookup=None,scheduler=None,should_cancel=lambda:False,status=la
                 _finish(db,job,'pending' if error.kind=='cancelled' else 'deferred',error.kind,retry,error.attempts if error.kind not in {'waiting','cancelled'} else 0)
             elif item:
                 # Never reclassify a normal queue entry into Restricted content.
-                if item.get('isAdult') is True:_finish(db,job,'unresolved','scope_conflict',scheduler.clock()+86400)
+                if item.get('isAdult') is True:_finish(db,job,'unresolved','scope_conflict')
                 else:
                     row=db.anime(job['anime_id']);old=state.safe_json(row['metadata_json'])
                     item=state.merge_art(old,{**old,**item}) if old.get('id')==item.get('id') else state.merge_art(old,item)
@@ -240,7 +240,10 @@ def process(db,*,lookup=None,scheduler=None,should_cancel=lambda:False,status=la
                     db.connection.execute('UPDATE scan_file_matches SET report=?,state=? WHERE media_id=?',(json.dumps(details),'Needs Review' if report.candidates else 'Unmatched',job['media_id']))
                 else:
                     previous=state.source_state(db,job['anime_id']);state.record(db,job['anime_id'],state='Needs Review' if report.candidates else 'Unmatched',report=details,method='automatic',part=previous['part'],format_hint=previous['format_hint'],commit=False)
-                _finish(db,job,'unresolved',kind,scheduler.clock()+RETRY[kind])
+                # Give new catalog entries one delayed chance to appear.
+                # Further attempts require a changed source or manual review.
+                retry = scheduler.clock() + RETRY[kind] if job['outcome'] not in {'ambiguous', 'no_match'} else 0
+                _finish(db,job,'unresolved',kind,retry)
         processed+=1;status(progress_text(db))
         if error and error.kind in {'rate_limited','waiting','network','timeout','api_unavailable','cancelled'}:break
     elapsed=round((time.monotonic()-started)*1000)

@@ -48,7 +48,7 @@ class MetadataQueueMixin:
         if self._closing:return
         if manual:self.db.set_setting('metadata_paused','0')
         if self.db.setting('metadata_paused','0')=='1':return
-        if not self.db.connection.execute("SELECT 1 FROM metadata_jobs WHERE scope='normal' AND state<>'completed' LIMIT 1").fetchone():return
+        if not self.db.connection.execute("SELECT 1 FROM metadata_jobs WHERE scope='normal' AND (state IN ('pending','deferred','running') OR (state='unresolved' AND next_at>0)) LIMIT 1").fetchone():return
         if self.metadata_worker is None or not self.metadata_worker.isRunning():
             if self.metadata_worker is not None:self.metadata_worker.deleteLater()
             self.metadata_worker=MetadataWorker(self.db_path)

@@ -87,7 +87,7 @@ class ScannerReview(QDialog):
             path=Path(media['path'])
             try:name=str(path.relative_to(base))
             except ValueError:name=path.name
-            lines.append(f"• {name} · S{media['season']} E{media['episode_label'] if media['episode_label'] is not None else media['episode']}"+(f"–{media['episode_end']}" if media['episode_end'] else '')+(' · Unavailable' if not media['present'] else ''))
+            lines.append(f"• {name} · {media['kind']}{' · S'+str(media['season'])+' E'+str(media['episode_label'] if media['episode_label'] is not None else media['episode']) if media['episode'] is not None else ''}"+(f"–{media['episode_end']}" if media['episode_end'] else '')+(' · Unavailable' if not media['present'] else ''))
         lines.extend(state.safe_json(source['warnings']) or [])
         for decision in report.get('decisions',[]):lines.append(f"Candidate {decision.get('id')}: {decision.get('reason')}")
         self.details.setPlainText('\n'.join(str(v) for v in lines));self.query.setText(row['title']);self.show_candidates(report.get('candidates',[]))

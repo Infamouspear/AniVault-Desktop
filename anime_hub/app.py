@@ -2740,7 +2740,16 @@ class Window(MetadataQueueMixin,ScannerReviewMixin,AiringUpdatesMixin,HubMixin,L
                 if m["watched"]: item.setForeground(QColor("#9a8296"))
                 elif m["id"]==next_id: item.setForeground(QColor("#ff6a96"))
                 episodes.addItem(item)
-        groups=(("Specials",{"special","movie"}),("Artwork & Scans",{"artwork"}),("Audio",{"audio"}),("Other Files",{"other"}))
+        groups = (
+            ("Specials and OVAs", {"special", "ova", "movie"}),
+            ("Openings and endings", {"opening", "ending", "credits"}),
+            ("Trailers", {"trailer"}),
+            ("Menus and bonus features", {"menu", "bonus"}),
+            ("Alternate versions", {"alternate"}),
+            ("Artwork & Scans", {"artwork"}),
+            ("Audio", {"audio"}),
+            ("Other Files", {"other"}),
+        )
         for heading,kinds in groups:
             group=[m for m in media if m["kind"] in kinds]
             if not group: continue

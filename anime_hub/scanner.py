@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 import re
-import os
-import hashlib
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .parser import (AUDIO_EXTS, CATEGORY_NAMES, EXTRA_DIR_WORDS, IMAGE_EXTS, VIDEO_EXTS,
-                     classify_file, contains_media, is_structural_folder, parse_title)
+from .parser import (AUDIO_EXTS, CATEGORY_NAMES, IMAGE_EXTS, VIDEO_EXTS,
+                     classify_file, contains_media, extra_folder_kind, is_structural_folder, parse_title)
 from .metadata import AniListClient, cache_artwork, lookup_anilist
 
 
@@ -33,18 +31,6 @@ def _media_children(folder: Path) -> list[Path]:
 
 BUNDLE_MARKER=re.compile(r"\b(?:complete|collection|franchise|series\s*\+\s*movies?)\b",re.I)
 NON_PRIMARY_VIDEO=re.compile(r"(?:^|[\s._\-\[\]()])(?:NCOP|NCED|OP\d*|ED\d*|opening|ending|trailer|preview|PV\d*|CM\d*|sample|creditless|clean[ ._-]*(?:op|ed|opening|ending)|bonus)(?:$|[\s._\-\[\]()])",re.I)
-
-
-def _is_series_bundle(folder: Path, meaningful_children: list[Path]) -> bool:
-    """Recognize one franchise release whose numbered stage folders belong together."""
-    if len(meaningful_children)<2 or not BUNDLE_MARKER.search(folder.name): return False
-    parent_words={word for word in re.findall(r"[a-z0-9]+",parse_title(folder.name).title.casefold()) if len(word)>1}
-    if not parent_words: return False
-    matches=0
-    for child in meaningful_children:
-        child_words=set(re.findall(r"[a-z0-9]+",parse_title(child.name).title.casefold()))
-        if parent_words & child_words: matches+=1
-    return matches>=max(2,len(meaningful_children)//2)
 
 
 def discover_series_roots(root: Path, child_log: list[str] | None = None):
@@ -86,6 +72,37 @@ def _write_diagnostics(path: Path | None, diagnostics: list[str], child_log: lis
 
 
 
+def select_episode_versions(db, anime_id, media):
+    """Keep one automatic playback entry per numbered episode."""
+    previous = {row["path"]: row for row in db.media(anime_id)}
+    groups = {}
+    for item in media:
+        if item.kind == "episode":
+            groups.setdefault((item.season, item.episode_label if item.episode_label is not None else item.episode), []).append(item)
+
+    def rank(item):
+        row = previous.get(str(item.path))
+        has_progress = bool(row and (row["watched"] or row["resume_position_ms"]))
+        match = re.search(r"(?i)\d+v(\d+)(?![a-z0-9])", item.path.stem)
+        revision = int(match.group(1)) if match else 1
+        return not has_progress, -revision, str(item.path).casefold()
+
+    for versions in groups.values():
+        if len(versions) < 2:
+            continue
+        automatic = []
+        manual_episode = False
+        for item in versions:
+            override = db.connection.execute("SELECT kind FROM overrides WHERE path=?", (str(item.path),)).fetchone()
+            if override is None:
+                automatic.append(item)
+            elif override["kind"] == "episode":
+                manual_episode = True
+        for alternate in sorted(automatic, key=rank)[int(not manual_episode):]:
+            alternate.kind = "alternate"
+            alternate.reason = "alternate or duplicate episode number"
+
+
 def _scan(root: Path, db, progress=lambda *_: None, diagnostics_path: Path | None = None,
          metadata_status=lambda _message: None, should_cancel=lambda: False, *, match_online=True):
     child_log: list[str] = []
@@ -102,7 +119,6 @@ def _scan(root: Path, db, progress=lambda *_: None, diagnostics_path: Path | Non
     original_sources=state.source_snapshot(db)
     db.start_scan(root)
     touched=[]
-    mixed_ids=set()
     pending_states=[]
     for index, series in enumerate(roots, 1):
         if should_cancel():
@@ -119,9 +135,14 @@ def _scan(root: Path, db, progress=lambda *_: None, diagnostics_path: Path | Non
         touched.append(anime_id)
         episode_count = extras_count = 0
         classification_notes = []
-        parsed_media=[classify_file(file,0 if category.casefold()=="movies" else parsed_title.season) for file in media_files]
+        parsed_media=[classify_file(file,0 if category.casefold()=="movies" else parsed_title.season, release_root=release) for file in media_files]
         videos=[item for item in parsed_media if item.path.suffix.lower() in VIDEO_EXTS]
-        if parsed_title.format_hint is None and videos and any(item.kind=='episode' for item in videos):parsed_title.format_hint='SERIES'
+        direct_ova = any(item.path.parent == release and item.kind == "special"
+                         and re.search(r"\b(?:OVA|OAD)\b", item.path.stem, re.I) for item in videos)
+        if parsed_title.format_hint is None and BUNDLE_MARKER.search(release.name) and direct_ova:
+            parsed_title.format_hint = "OVA"
+        if parsed_title.format_hint is None and any(item.kind == "episode" for item in videos):
+            parsed_title.format_hint = "SERIES"
         # Standalone films/OVAs frequently have no episode token. Determine the
         # primary candidate relative to this release root (not all ancestors,
         # since a legitimate title may itself be named "Extra Stage"). A folder
@@ -129,15 +150,36 @@ def _scan(root: Path, db, progress=lambda *_: None, diagnostics_path: Path | Non
         primary=[]
         for item in videos:
             relative=item.path.relative_to(release); nested_parts=relative.parts[:-1]
-            in_extras=any(EXTRA_DIR_WORDS.search(part) or re.fullmatch(r"(?i)NC|NCOP|NCED|openings?|endings?",part) for part in nested_parts)
+            in_extras=any(extra_folder_kind(part) for part in nested_parts)
             clearly_extra=in_extras or bool(NON_PRIMARY_VIDEO.search(item.path.stem))
             if not clearly_extra: primary.append(item)
-        if not any(item.kind=="episode" for item in parsed_media) and primary:
-            natural=lambda item:[int(part) if part.isdigit() else part.casefold() for part in re.split(r"(\d+)",str(item.path.relative_to(release)))]
-            for episode,candidate in enumerate(sorted(primary,key=natural),1):
-                if candidate.kind in {"other","movie","special"}:
-                    candidate.kind="episode"; candidate.season=parsed_title.season; candidate.episode=episode
-                    candidate.reason="primary playable video fallback (deterministic order)"
+        if len(primary) == 1:
+            item = primary[0]
+            if (item.reason == "bare numbered-video fallback"
+                    and parse_title(item.path.stem).title.casefold() == parsed_title.title.casefold()):
+                item.episode = 1
+                item.reason = "single video whose name matches the release"
+        if (parsed_title.format_hint is None and primary and all(
+                item.kind == "special" and re.search(r"\b(?:OVA|OAD)\b", item.path.stem, re.I)
+                for item in primary)):
+            parsed_title.format_hint = "OVA"
+        if not any(item.kind == "episode" for item in parsed_media):
+            # A named movie or OVA may be the primary playable item. Multiple
+            # unnumbered videos in an ordinary series need review.
+            standalone = parsed_title.format_hint in {"MOVIE", "OVA", "SPECIAL", "PICTURE_DRAMA"} or category.casefold() == "movies"
+            candidates = [item for item in primary if item.kind in {"other", "movie", "special"}]
+            playable = candidates if standalone else [item for item in candidates if item.kind == "other"]
+            if standalone or len(primary) == len(playable) == 1:
+                def natural_order(item):
+                    return [int(part) if part.isdigit() else part.casefold()
+                            for part in re.split(r"(\d+)", str(item.path.relative_to(release)))]
+
+                for episode, candidate in enumerate(sorted(playable, key=natural_order), 1):
+                    candidate.kind = "episode"
+                    candidate.season = parsed_title.season
+                    candidate.episode = episode
+                    candidate.reason = "primary playable video fallback"
+        select_episode_versions(db, anime_id, parsed_media)
         from .episode_identity import assign_labels
         assign_labels(parsed_media,parsed_title.format_hint=='PICTURE_DRAMA')
         for parsed_file in parsed_media:
@@ -150,11 +192,12 @@ def _scan(root: Path, db, progress=lambda *_: None, diagnostics_path: Path | Non
         # Shared OVA/movie/special folders retain their stable parent record.
         # Distinct file identities are reviewed separately instead of borrowing one show's metadata.
         mixed=bool(parsed_title.format_hint in {'MOVIE','OVA','SPECIAL'} and len(primary)>1)
-        if mixed:
-            mixed_ids.add(anime_id)
-            for candidate in primary:
-                media=db.connection.execute('SELECT id FROM media WHERE path=?',(str(candidate.path),)).fetchone()
-                db.connection.execute("INSERT INTO scan_file_matches(media_id,parsed_title,format_hint) VALUES(?,?,?) ON CONFLICT(media_id) DO UPDATE SET parsed_title=excluded.parsed_title,format_hint=excluded.format_hint",(media['id'],state.file_title(candidate.path,parsed_title.title),parsed_title.format_hint))
+        file_matches = [(candidate, parsed_title.format_hint) for candidate in primary] if mixed else []
+        if parsed_title.format_hint == 'MOVIE':
+            file_matches.extend((item, 'OVA') for item in videos if item.kind == 'ova')
+        for candidate, format_hint in file_matches:
+            media=db.connection.execute('SELECT id FROM media WHERE path=?',(str(candidate.path),)).fetchone()
+            db.connection.execute("INSERT INTO scan_file_matches(media_id,parsed_title,format_hint) VALUES(?,?,?) ON CONFLICT(media_id) DO UPDATE SET parsed_title=excluded.parsed_title,format_hint=excluded.format_hint",(media['id'],state.file_title(candidate.path,parsed_title.title),format_hint))
         saved = db.anime(anime_id)
         saved_metadata = json.loads(saved["metadata_json"] or "{}")
         matched_title = (saved_metadata.get("title", {}).get("english") or
@@ -174,7 +217,7 @@ def _scan(root: Path, db, progress=lambda *_: None, diagnostics_path: Path | Non
                 decision=evaluate_candidate(parsed_title.title,saved_metadata,parsed_title.season if parsed_title.season_explicit else None,parsed_title.year,alternates=(parsed_title.alternate_title,),format_hint=parsed_title.format_hint)
                 level='Existing match' if decision['eligible'] and decision['score']>=.86 else 'Needs Review'
                 reason='Existing link retained; original match provenance is unknown.' if level=='Existing match' else decision['reason']
-            pending_states.append((anime_id,level,{'query':parsed_title.title,'reason':reason},parsed_title,mixed))
+            pending_states.append((anime_id, level, {'query':parsed_title.title,'reason':reason}, parsed_title))
         if saved["anilist_id"] and db.anime_scope(saved,fresh=False)=='normal':
             diagnostics.extend([f"Search title: {parsed_title.title}", "Request attempted: No",
                                 "HTTP status: N/A", "API error/response: Existing match preserved",
@@ -191,11 +234,14 @@ def _scan(root: Path, db, progress=lambda *_: None, diagnostics_path: Path | Non
     from .reconciliation import complete
     complete(db,root,touched,before)
 
-    for anime_id,level,details,parsed,mixed in pending_states:
-        if mixed:mixed_ids.add(anime_id)
+    for anime_id, level, details, parsed in pending_states:
         previous=state.source_state(db,anime_id)
         preserved=state.safe_json(previous['report'])
-        state.record(db,anime_id,state=level if level=='Needs Review' or not preserved.get('candidates') else previous['state'],report=preserved if level!='Needs Review' and preserved.get('query')==parsed.title else details,part=parsed.part,format_hint=parsed.format_hint,commit=False)
+        if preserved.get('query') == parsed.title and 'candidates' in preserved:
+            if level == 'Unmatched' or (level == 'Existing match' and previous['state'] == 'High Confidence'):
+                level, details = previous['state'], preserved
+        state.record(db, anime_id, state=level, report=details, part=parsed.part,
+                     format_hint=parsed.format_hint, commit=False)
 
     state.flag_duplicate_matches(db)
     db.finish_scan()
@@ -206,7 +252,7 @@ def _scan(root: Path, db, progress=lambda *_: None, diagnostics_path: Path | Non
     jobs.enqueue_existing(db,set(touched))
     metadata_status(f'Local Library Scan completed: {len(roots)} roots indexed. '+jobs.progress_text(db))
     if match_online:
-        jobs.process(db,lookup=lookup_anilist,scheduler=scheduler,should_cancel=should_cancel,status=metadata_status,max_jobs=100000,include_artwork=False)
+        jobs.process(db,lookup=lookup_anilist,scheduler=scheduler,should_cancel=should_cancel,status=metadata_status,max_jobs=100000,include_artwork=False,max_seconds=120)
         # Standalone callers retain identification compatibility; desktop indexing
         # uses match_online=False and a separate persistent metadata worker.
     for row in db.anime_list():
